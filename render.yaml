@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: metropolis-gate-control
+    env: python
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+      # Install Chrome and ChromeDriver for Selenium
+      apt-get update
+      apt-get install -y wget gnupg
+      wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add -
+      echo "deb http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list
+      apt-get update
+      apt-get install -y google-chrome-stable
+      apt-get install -y chromium-chromedriver
+    startCommand: "gunicorn --worker-class gevent -w 1 --bind 0.0.0.0:$PORT app:app"
+    plan: free
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      - key: AUTH_KEY
+        sync: false
+      - key: METROPOLIS_EMAIL
+        sync: false
+      - key: METROPOLIS_PASSWORD
+        sync: false

@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Metropolis Parking Management</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+    <!-- Header -->
+    <header class="app-header">
+        <div class="container">
+            <h1>Metropolis Parking Management</h1>
+            <div class="header-actions">
+                {% if token_info %}
+                <div class="token-status">
+                    <span class="token-indicator {% if token_info.is_expired %}expired{% else %}valid{% endif %}">
+                        {{ '⚠ EXPIRED' if token_info.is_expired else '✓ VALID' }}
+                    </span>
+                    <span class="token-time">{{ token_info.remaining }}</span>
+                </div>
+                {% endif %}
+                <a href="{{ url_for('logout') }}" class="btn btn-secondary">Logout</a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container">
+        <!-- Tabs Navigation -->
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="gates">Gate Controls</button>
+            <button class="tab-btn" data-tab="monitoring">Auto-Monitor</button>
+            <button class="tab-btn" data-tab="members">Members</button>
+            <button class="tab-btn" data-tab="blacklist">Blacklist</button>
+            <button class="tab-btn" data-tab="token">Token Mgmt</button>
+            <button class="tab-btn" data-tab="visits">Recent Visits</button>
+            <button class="tab-btn" data-tab="occupancy">Occupancy</button>
+            <button class="tab-btn" data-tab="emergency">Emergency</button>
+        </div>
+
+        <!-- Tab Content -->
+        <div class="tab-content">
+            <!-- Gate Controls Tab -->
+            <div id="gates-tab" class="tab-pane active">
+                <h2>Gate Controls</h2>
+                <p class="status-message" id="gate-status">Ready</p>
+
+                <div class="gates-grid">
+                    <div class="gate-card">
+                        <h3>6th Street Exit</h3>
+                        <p>Site 4005 - Lane 5568</p>
+                        <button class="btn btn-primary btn-lg" onclick="openGate('5568', '6th Street Exit', '4005')">
+                            Open Gate
+                        </button>
+                    </div>
+
+                    <div class="gate-card">
+                        <h3>L Street Exit</h3>
+                        <p>Site 4005 - Lane 5569</p>
+                        <button class="btn btn-primary btn-lg" onclick="openGate('5569', 'L Street Exit', '4005')">
+                            Open Gate
+                        </button>
+                    </div>
+
+                    <div class="gate-card">
+                        <h3>Bank of America Exit</h3>
+                        <p>Site 4007 - Lane 5565</p>
+                        <button class="btn btn-primary btn-lg" onclick="openGate('5565', 'Bank of America Exit', '4007')">
+                            Open Gate
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Auto-Monitor Tab -->
+            <div id="monitoring-tab" class="tab-pane">
+                <h2>Auto-Monitor for Members</h2>
+                <p class="subtitle">Automatically open gates for whitelisted members</p>
+
+                <div class="monitor-status">
+                    <div class="status-indicator">
+                        <span id="monitor-status-icon">⚫</span>
+                        <span id="monitor-status-text">Monitoring: OFF</span>
+                    </div>
+
+                    <button id="toggle-monitor-btn" class="btn btn-success btn-lg" onclick="toggleMonitoring()">
+                        Start Monitoring
+                    </button>
+                </div>
+
+                <div class="info-box">
+                    <h4>How It Works:</h4>
+                    <ul>
+                        <li>Checks for members every 3 seconds</li>
+                        <li>Auto-opens gate when member vehicle detected</li>
+                        <li>Blocks blacklisted vehicles even if they're members</li>
+                        <li>Works for both sites (4005 & 4007)</li>
+                    </ul>
+                </div>
+
+                <div id="monitor-log" class="log-box"></div>
+            </div>
+
+            <!-- Members Tab -->
+            <div id="members-tab" class="tab-pane">
+                <h2>Member License Plates</h2>
+
+                <div class="member-controls">
+                    <input type="text" id="member-plate-input" placeholder="License Plate (e.g., ABC123)" class="form-input">
+                    <button class="btn btn-success" onclick="addMember()">Add Member</button>
+                </div>
+
+                <div class="list-container">
+                    <ul id="members-list" class="plate-list"></ul>
+                </div>
+            </div>
+
+            <!-- Blacklist Tab -->
+            <div id="blacklist-tab" class="tab-pane">
+                <h2>Blacklisted Vehicles</h2>
+                <p class="alert alert-warning">Blacklisted plates will be BLOCKED even if they're members</p>
+
+                <div class="member-controls">
+                    <input type="text" id="blacklist-plate-input" placeholder="License Plate (e.g., XYZ789)" class="form-input">
+                    <button class="btn btn-danger" onclick="addBlacklist()">Add to Blacklist</button>
+                </div>
+
+                <div class="list-container">
+                    <ul id="blacklist-list" class="plate-list blacklist"></ul>
+                </div>
+            </div>
+
+            <!-- Token Management Tab -->
+            <div id="token-tab" class="tab-pane">
+                <h2>Authentication Token Management</h2>
+
+                <div class="token-info-card">
+                    <h3>Current Token Status</h3>
+                    <div id="token-details">
+                        {% if token_info %}
+                        <p><strong>Expires:</strong> {{ token_info.expires }}</p>
+                        <p><strong>Time Remaining:</strong> {{ token_info.remaining }}</p>
+                        <p><strong>Status:</strong>
+                            <span class="badge {% if token_info.is_expired %}badge-danger{% else %}badge-success{% endif %}">
+                                {{ 'EXPIRED' if token_info.is_expired else 'VALID' }}
+                            </span>
+                        </p>
+                        {% else %}
+                        <p class="text-muted">No token information available</p>
+                        {% endif %}
+                    </div>
+
+                    <button class="btn btn-primary btn-lg" onclick="refreshToken()">
+                        🧪 Test Token Refresh
+                    </button>
+                </div>
+
+                <div class="token-monitor-controls">
+                    <h3>Auto-Monitor (Every 3 Minutes)</h3>
+                    <div class="status-indicator">
+                        <span id="token-monitor-status-icon">⚫</span>
+                        <span id="token-monitor-status-text">Auto-Monitor: OFF</span>
+                    </div>
+
+                    <button id="toggle-token-monitor-btn" class="btn btn-success btn-lg" onclick="toggleTokenMonitor()">
+                        Start Auto-Monitor
+                    </button>
+                </div>
+
+                <div class="info-box">
+                    <h4>How Auto-Monitor Works:</h4>
+                    <ul>
+                        <li>Checks token expiration every 3 minutes</li>
+                        <li>Automatically refreshes if token expires within 5 minutes</li>
+                        <li>Uses headless browser (no windows appear)</li>
+                        <li>Updates AUTH_KEY in memory and environment</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Recent Visits Tab -->
+            <div id="visits-tab" class="tab-pane">
+                <h2>Recent Visits</h2>
+                <button class="btn btn-primary" onclick="loadVisits()">Refresh</button>
+
+                <div class="sites-container">
+                    <div class="site-section">
+                        <h3>555 Capitol Mall (Site 4005)</h3>
+                        <div id="visits-4005" class="data-display">Loading...</div>
+                    </div>
+
+                    <div class="site-section">
+                        <h3>Bank of America (Site 4007)</h3>
+                        <div id="visits-4007" class="data-display">Loading...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Occupancy Tab -->
+            <div id="occupancy-tab" class="tab-pane">
+                <h2>Garage Occupancy</h2>
+                <button class="btn btn-primary" onclick="loadOccupancy()">Refresh</button>
+
+                <div class="sites-container">
+                    <div class="site-section">
+                        <h3>555 Capitol Mall (Site 4005)</h3>
+                        <div id="occupancy-4005" class="data-display">Loading...</div>
+                    </div>
+
+                    <div class="site-section">
+                        <h3>Bank of America (Site 4007)</h3>
+                        <div id="occupancy-4007" class="data-display">Loading...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Emergency Tab -->
+            <div id="emergency-tab" class="tab-pane">
+                <h2 class="text-danger">⚠️ EMERGENCY CONTROLS ⚠️</h2>
+
+                <div class="emergency-card">
+                    <button class="btn btn-danger btn-xl" onclick="openAllGates()">
+                        🚨 OPEN ALL GATES 🚨
+                    </button>
+
+                    <p class="text-muted">Opens all gates at both sites simultaneously</p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+        <p>Metropolis Parking Management System | Authorized Personnel Only</p>
+    </footer>
+
+    <!-- Scripts -->
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
