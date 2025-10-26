@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  parking-app:
+    build: .
+    ports:
+      - "10000:10000"
+    environment:
+      # Required - Change these!
+      - SECRET_KEY=change-this-to-a-random-secret-key
+      - ADMIN_PASSWORD=your-admin-password
+      
+      # Auto token refresh settings
+      - AUTO_TOKEN_REFRESH=true
+      - EMAIL=security@555capitolmall.com
+      - PASSWORD=555_Security
+      
+      # Optional - API configuration
+      - AUTH_KEY=your-metropolis-auth-token
+      - BASE_URL=https://specialist.api.metropolis.io
+      - SITE_ID=4005
+      
+    volumes:
+      # Persist token file across restarts
+      - ./auth_token.txt:/app/auth_token.txt
+    
+    restart: unless-stopped
+    
+    # Add shared memory for Chrome
+    shm_size: '2gb'
+    
+    # Chrome needs privileged mode for some features
+    privileged: true

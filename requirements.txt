@@ -1,10 +1,8 @@
-Flask==3.0.0
-Flask-SocketIO==5.3.5
-Flask-CORS==4.0.0
-python-socketio==5.10.0
-python-engineio==4.8.0
+Flask==2.3.3
 requests==2.31.0
-selenium==4.16.0
-python-dotenv==1.0.0
+Werkzeug==2.3.7
 gunicorn==21.2.0
-simple-websocket==1.0.0
+
+# Optional for auto token refresh
+# Note: Selenium may not work on Render.com free tier due to browser driver requirements
+# selenium==4.16.0

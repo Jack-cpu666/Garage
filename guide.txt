@@ -1,0 +1,317 @@
+================================================================================
+METROPOLIS PARKING MANAGEMENT - RENDER.COM DEPLOYMENT GUIDE
+================================================================================
+
+This guide will help you deploy the Metropolis Parking Management System to Render.com
+
+================================================================================
+STEP 1: PREPARE YOUR REPOSITORY
+================================================================================
+
+1. Create a new GitHub repository
+2. Upload these files to your repository:
+   - app.py (the main application)
+   - requirements.txt (Python dependencies)
+
+================================================================================
+STEP 2: CREATE RENDER.COM ACCOUNT
+================================================================================
+
+1. Go to https://render.com
+2. Sign up for a free account (or login if you have one)
+3. Connect your GitHub account
+
+================================================================================
+STEP 3: CREATE NEW WEB SERVICE
+================================================================================
+
+1. From your Render dashboard, click "New +"
+2. Select "Web Service"
+3. Connect your GitHub repository
+4. Configure the service:
+   - Name: metropolis-parking (or your choice)
+   - Environment: Python 3
+   - Region: Choose closest to you
+   - Branch: main (or master)
+   - Build Command: pip install -r requirements.txt
+   - Start Command: gunicorn app:app
+
+================================================================================
+STEP 4: ENVIRONMENT VARIABLES
+================================================================================
+
+Add the following environment variables in Render.com dashboard:
+
+REQUIRED VARIABLES:
+-------------------
+SECRET_KEY=your-secret-key-here-make-it-random-and-long
+ADMIN_PASSWORD=your-admin-password-here
+
+OPTIONAL VARIABLES (defaults are already set in app.py):
+---------------------------------------------------------
+AUTH_KEY=eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJpbXpVMnE4NXQxSDB5U2RpUHRKNmtmeWpkYXZlR2ZiaHdyZ01KbXNHZTQ4In0.eyJleHAiOjE3NjE0NTMwOTMsImlhdCI6MTc2MTQ0OTQ5MywiYXV0aF90aW1lIjoxNzYxNDQ5NDkyLCJqdGkiOiJlZmI2NzY2ZS04MTFlLTQzMmUtODc0Yy05NDc3YTRhYTIxMGQiLCJpc3MiOiJodHRwczovL2F1dGgubWV0cm9wb2xpcy5pby9yZWFsbXMvbWV0cm9wb2xpcyIsImF1ZCI6WyJtZXRyb3BvbGlzLXJlc291cmNlLWNsaWVudCIsIm1ldHJvcG9saXMtdXNlci1jbGllbnQiLCJtZXRyb3BvbGlzLXNlcnZlci1jbGllbnQiLCJhY2NvdW50Il0sInN1YiI6ImU2MzEzOWI2LWUyNzgtNGUwNS05ZDJmLTMzZWUxOGQwZGI4YyIsInR5cCI6IkJlYXJlciIsImF6cCI6Im1ldHJvcG9saXMtd2ViLWNsaWVudCIsIm5vbmNlIjoiMzA5MzA4MTYtM2JlYS00NTg1LTkyYWEtMzJlMDYwYzBhNjIzIiwic2Vzc2lvbl9zdGF0ZSI6ImQxMDk4YWJlLTM0ZTYtNGQ2Ny1hMTk2LTdlZWI3YTQ4YWRjZSIsImFjciI6IjEiLCJhbGxvd2VkLW9yaWdpbnMiOlsiaHR0cHM6Ly9tYW5hZ2VyLm1ldHJvcG9saXMuaW8iLCJodHRwczovL3BvcnRhbC5tZXRyb3BvbGlzLmlvIiwiaHR0cHM6Ly9yZXF1ZXN0Lm1ldHJvcG9saXMuaW8iLCJodHRwczovL2ludGFrZS5tZXRyb3BvbGlzLmlvIiwiaHR0cHM6Ly9kZXZvcHMudG9vbHMubWV0cm9wLmlvIiwiaHR0cHM6Ly9oYXJkd2FyZS5lZGdlLm1ldHJvcG9saXMuaW8iLCJodHRwczovL3NwZWNpYWxpc3QubWV0cm9wb2xpcy5pbyIsImh0dHA6Ly9sb2NhbGhvc3Q6MzAwMSIsImh0dHA6Ly9sb2NhbGhvc3Q6MzAwMCIsImh0dHBzOi8vZWRnZS5hdGcubWV0cm9wb2xpcy5pbyJdLCJyZWFsbV9hY2Nlc3MiOnsicm9sZXMiOlsiZGVmYXVsdC1yb2xlcy10ZXN0Iiwib2ZmbGluZV9hY2Nlc3MiLCJ1bWFfYXV0aG9yaXphdGlvbiJdfSwicmVzb3VyY2VfYWNjZXNzIjp7Im1ldHJvcG9saXMtc2VydmVyLWNsaWVudCI6eyJyb2xlcyI6WyJlbmZvcmNlbWVudCIsInBhcmtpbmcgcGFzcyIsInZhbGV0IiwiaW50YWtlIiwib3BlcmF0b3IiXX19LCJzY29wZSI6Im9wZW5pZCBwcm9maWxlIGVtYWlsIiwic2lkIjoiZDEwOThhYmUtMzRlNi00ZDY3LWExOTYtN2VlYjdhNDhhZGNlIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsIm5hbWUiOiI1NTUgU2VjdXJpdHkgIiwicHJlZmVycmVkX3VzZXJuYW1lIjoic2VjdXJpdHlANTU1Y2FwaXRvbG1hbGwuY29tIiwiZ2l2ZW5fbmFtZSI6IjU1NSIsImZhbWlseV9uYW1lIjoiU2VjdXJpdHkgIiwiZW1haWwiOiJzZWN1cml0eUA1NTVjYXBpdG9sbWFsbC5jb20ifQ.Xcaxd5K_0sazYYyaqDZiKWapPLqkKcrJcr6ox_Uei-PpRNLBRFTcjCuj3EAHTVL1Va0w0WFvY0uVP51PTRnrx8IvZsNpbu38B9BF6a_gjk0oMHSIb8A3Eu-rQsNdniiirDk7Yy_f-7mp6FCa6xIr83rHeyNnwMdTP_EkOzD-fUSgLtUVWmM9JoRDlv9U2A6hM1gVehV3EY5T5PQH4IcHATkeJmCWCA2N5KTjCmTHNVlWyrX84YX6TGmuDIdzJCdb2WHfOIM5Pf6128s-BHDhurB-nF27ktZ7dlbQOUkaCiIUlHzMqdAVqHRJK-eyX0Fd6KBUZa64cuJoanZNRTGldQ
+BASE_URL=https://specialist.api.metropolis.io
+SITE_ID=4005
+EMAIL=security@555capitolmall.com
+PASSWORD=555_Security
+AUTO_TOKEN_REFRESH=true
+
+VARIABLES FOR AUTO TOKEN REFRESH (HIGHLY RECOMMENDED):
+--------------------------------------------------------
+AUTO_TOKEN_REFRESH=true  # Set to 'false' to disable auto-refresh
+EMAIL=security@555capitolmall.com  # Your Metropolis login email
+PASSWORD=555_Security  # Your Metropolis password
+
+HOW TO ADD ENVIRONMENT VARIABLES IN RENDER:
+--------------------------------------------
+1. Go to your Web Service dashboard
+2. Click on "Environment" in the left sidebar
+3. Click "Add Environment Variable"
+4. Add each variable with its key and value
+5. Click "Save Changes"
+
+IMPORTANT NOTES ABOUT VARIABLES:
+---------------------------------
+- SECRET_KEY: Generate a random string (32+ characters). You can use:
+  python -c "import secrets; print(secrets.token_hex(32))"
+  
+- ADMIN_PASSWORD: This is the password you'll use to login to the web interface
+  Make it strong and secure!
+  
+- AUTH_KEY: This is your Metropolis API token. The default one provided might expire.
+  WITH AUTO TOKEN REFRESH ENABLED, THE SYSTEM WILL AUTOMATICALLY GET NEW TOKENS!
+  
+- AUTO_TOKEN_REFRESH: When set to 'true', the system will:
+  * Check token validity every 3 minutes
+  * Automatically get a new token when expired
+  * Use headless browser automation (requires Selenium)
+  * Save new tokens to persist across restarts
+
+================================================================================
+STEP 4.5: ENABLE AUTO TOKEN REFRESH (OPTIONAL BUT RECOMMENDED)
+================================================================================
+
+The system includes an automatic token refresh feature that prevents token expiration!
+
+TO ENABLE AUTO TOKEN REFRESH:
+------------------------------
+1. In your requirements.txt, uncomment the Selenium line:
+   selenium==4.16.0
+
+2. Add browser buildpack to Render:
+   - Go to your Web Service settings
+   - Under "Build & Deploy" section
+   - Add buildpack: https://github.com/heroku/heroku-buildpack-google-chrome
+   OR
+   - Install chromium-browser in your Docker container if using Docker
+
+3. Set environment variables:
+   AUTO_TOKEN_REFRESH=true
+   EMAIL=your-metropolis-email
+   PASSWORD=your-metropolis-password
+
+4. Redeploy your service
+
+FEATURES OF AUTO TOKEN REFRESH:
+--------------------------------
+✅ Checks token validity every 3 minutes
+✅ Automatically gets new token when expired
+✅ Uses headless browser (no visual interface)
+✅ Supports Chrome, Edge, and Firefox browsers
+✅ Saves tokens to persist across restarts
+✅ Dashboard shows token status in real-time
+✅ Manual "Test Token" button for verification
+✅ Manual "Get New Token" button for forced refresh
+
+DASHBOARD TOKEN STATUS INDICATORS:
+-----------------------------------
+🟢 Green border + "Valid" badge = Token is working
+🔴 Red border + "Invalid/Expired" badge = Token needs refresh
+⏰ Shows last check time and last refresh time
+⚠️ Shows any error messages if refresh fails
+
+WITHOUT AUTO TOKEN REFRESH:
+----------------------------
+If you don't enable auto token refresh:
+- You'll need to manually update AUTH_KEY when it expires
+- The dashboard will show token status as "Disabled"
+- You can still use the manual "Test Token" button
+- Consider setting up a reminder to update tokens periodically
+
+================================================================================
+STEP 5: DEPLOY
+================================================================================
+
+1. Click "Create Web Service"
+2. Wait for the build to complete (usually 2-5 minutes)
+3. Your app will be available at: https://your-app-name.onrender.com
+
+================================================================================
+STEP 6: ACCESS YOUR APPLICATION
+================================================================================
+
+1. Navigate to your Render URL
+2. Login with the ADMIN_PASSWORD you set
+3. Start managing your parking system!
+
+================================================================================
+FEATURES AVAILABLE IN WEB VERSION
+================================================================================
+
+✅ Dashboard with real-time statistics
+✅ Gate control for both parking sites
+✅ Transaction search and monitoring
+✅ Member management (add/remove)
+✅ Blacklist management
+✅ Visitor pass creation
+✅ Camera feed placeholders (ready for real feeds)
+✅ Auto-refreshing data
+✅ Responsive design for mobile/tablet
+✅ Beautiful modern UI
+✅ **AUTO TOKEN REFRESH** - Never worry about expired tokens!
+   - Checks token validity every 3 minutes
+   - Automatically gets new token when expired
+   - Uses headless browser automation
+   - Dashboard shows real-time token status
+   - Manual test and refresh buttons
+
+================================================================================
+SECURITY CONSIDERATIONS
+================================================================================
+
+1. ALWAYS use HTTPS (Render provides this automatically)
+2. Change the default AUTH_KEY if it expires
+3. Use a strong ADMIN_PASSWORD
+4. Consider adding IP whitelisting if needed
+5. Monitor your usage and logs regularly
+6. Rotate your SECRET_KEY periodically
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+COMMON ERRORS AND SOLUTIONS:
+-----------------------------
+
+1. "TemplateAssertionError: block 'content' defined twice"
+   SOLUTION: Fixed in latest version. If you see this error:
+   - Re-download the updated app.py
+   - Make sure you're using the latest version
+   - The helper function render_content() handles templates correctly
+
+2. "Internal Server Error" on login
+   SOLUTION: Usually means template error. Check:
+   - app.py is the latest version
+   - No manual edits to template sections
+   - Check logs for specific error
+
+3. Token refresh not working:
+   - Check Selenium is installed
+   - Verify Chrome/Edge/Firefox available
+   - Check EMAIL and PASSWORD are correct
+   - Look at console logs for errors
+   - Try manual "Get New Token" button
+
+4. Selenium not available:
+   - Install with: pip install selenium==4.16.0
+   - For Render: Add Chrome buildpack
+   - For Docker: Use provided Dockerfile
+   - Dashboard will show "Selenium not installed"
+
+5. Token still expires:
+   - Check AUTO_TOKEN_REFRESH=true
+   - Verify credentials are correct
+   - Check network connectivity
+   - Review error messages on dashboard
+
+If deployment fails:
+1. Check build logs in Render dashboard
+2. Verify all environment variables are set
+3. Make sure requirements.txt is in the root directory
+4. Check that Python version is compatible (3.8+)
+
+If API calls fail:
+1. AUTH_KEY might be expired - get a new one
+2. Check Metropolis API is accessible
+3. Verify SITE_ID is correct
+
+If login doesn't work:
+1. Make sure ADMIN_PASSWORD environment variable is set
+2. Clear browser cookies and try again
+3. Check browser console for errors
+
+================================================================================
+UPDATING THE APPLICATION
+================================================================================
+
+To update your app:
+1. Make changes in your GitHub repository
+2. Commit and push the changes
+3. Render will automatically redeploy (if auto-deploy is enabled)
+4. Or manually trigger a deploy from Render dashboard
+
+================================================================================
+MONITORING
+================================================================================
+
+In Render dashboard you can:
+- View logs in real-time
+- Monitor resource usage
+- Set up alerts
+- Check deployment status
+- View environment variables
+
+================================================================================
+FREE TIER LIMITATIONS
+================================================================================
+
+Render's free tier includes:
+- 750 hours/month of running time
+- Auto-sleep after 15 minutes of inactivity
+- Limited bandwidth and storage
+- Shared CPU and memory
+
+For production use, consider upgrading to a paid plan.
+
+================================================================================
+SUPPORT
+================================================================================
+
+For Render.com issues:
+- Documentation: https://render.com/docs
+- Community: https://community.render.com
+- Support: https://render.com/support
+
+For application issues:
+- Check the logs in Render dashboard
+- Verify environment variables
+- Test API endpoints manually
+
+================================================================================
+QUICK START CHECKLIST
+================================================================================
+
+□ Create GitHub repository
+□ Upload app.py and requirements.txt
+□ Create Render account
+□ Connect GitHub to Render
+□ Create new Web Service
+□ Set environment variables (SECRET_KEY and ADMIN_PASSWORD minimum)
+□ Deploy application
+□ Test login with ADMIN_PASSWORD
+□ Configure any additional settings
+
+================================================================================
+CONGRATULATIONS!
+================================================================================
+
+Your Metropolis Parking Management System should now be live on Render.com!
+
+Remember to:
+- Keep your credentials secure
+- Monitor the application regularly
+- Update the AUTH_KEY when it expires
+- Check Render's usage limits on free tier
+
+Enjoy your modern, cloud-based parking management system!
+================================================================================
