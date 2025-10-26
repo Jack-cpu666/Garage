@@ -13,7 +13,7 @@ services:
       apt-get update
       apt-get install -y google-chrome-stable
       apt-get install -y chromium-chromedriver
-    startCommand: "gunicorn --worker-class gevent -w 1 --bind 0.0.0.0:$PORT app:app"
+    startCommand: "gunicorn --worker-class gthread --workers 1 --threads 4 --timeout 120 --bind 0.0.0.0:$PORT app:app"
     plan: free
     envVars:
       - key: PYTHON_VERSION

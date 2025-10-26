@@ -38,8 +38,8 @@ app.config['SESSION_TYPE'] = 'filesystem'
 # Enable CORS
 CORS(app)
 
-# Initialize SocketIO for real-time updates (use gevent for Python 3.12 compatibility)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+# Initialize SocketIO for real-time updates (use threading for Render.com compatibility)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Global state
 AUTH_KEY = os.environ.get('AUTH_KEY', '')
@@ -344,6 +344,34 @@ def handle_stop_token_monitor():
     """Stop token monitoring"""
     stop_token_monitoring()
     emit('token_monitor_stopped', {'success': True})
+
+# ==================== HEALTH CHECK ====================
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint for monitoring"""
+    status = {
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'service': 'metropolis-gate-control',
+        'async_mode': 'threading',
+        'token_present': bool(AUTH_KEY),
+        'python_version': os.sys.version
+    }
+
+    # Check token if present
+    if AUTH_KEY:
+        try:
+            exp_time = get_token_expiration_time(AUTH_KEY)
+            if exp_time:
+                status['token_expires'] = exp_time.isoformat()
+                status['token_valid'] = not is_token_expired(AUTH_KEY)
+            else:
+                status['token_valid'] = False
+        except Exception as e:
+            status['token_error'] = str(e)
+
+    return jsonify(status), 200
 
 # ==================== ERROR HANDLERS ====================
 

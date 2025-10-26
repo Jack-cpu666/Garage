@@ -1,38 +1,58 @@
-# Python Version Fix for Render.com
+# Python Version & WebSocket Fix for Render.com
 
-## Problem
+## Problem 1: Python 3.13 Incompatibility
 
-Render may default to Python 3.13, which is incompatible with gevent 23.9.1:
+Render may default to Python 3.13, which was incompatible with gevent 23.9.1:
 ```
 Error compiling Cython file: undeclared name not builtin: long
 ```
 
-## Solution Applied
+## Problem 2: WebSocket Failures
 
-✅ **Updated gevent version** to 24.2.1 (Python 3.13 compatible)
+WebSocket connections failing with gevent-websocket:
+```
+RuntimeError: The gevent-websocket server is not
+WebSocket handshake failed with 500 error
+```
+
+## Solutions Applied
+
+✅ **Switched to threading mode** - Removed gevent/gevent-websocket entirely
+✅ **Updated gunicorn worker** - Changed from gevent to gthread
 ✅ **Created `runtime.txt`** - Forces Python 3.11.9
 ✅ **Created `.python-version`** - Backup Python version specification
-✅ **Updated `render.yaml`** - Sets PYTHON_VERSION environment variable
+✅ **Updated `render.yaml`** - Sets PYTHON_VERSION and gthread worker
 
 ## Files Modified
 
 1. **`requirements.txt`**
    ```
-   gevent==24.2.1  # Updated from 23.9.1
+   # REMOVED: gevent==24.2.1
+   # REMOVED: gevent-websocket==0.10.1
+   # ADDED:
+   python-engineio==4.8.0
+   simple-websocket==1.0.0
    ```
 
-2. **`runtime.txt`** (NEW)
+2. **`app.py`**
+   ```python
+   # Line 42:
+   socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+   ```
+
+3. **`runtime.txt`** (NEW)
    ```
    python-3.11.9
    ```
 
-3. **`.python-version`** (NEW)
+4. **`.python-version`** (NEW)
    ```
    3.11.9
    ```
 
-4. **`render.yaml`**
+5. **`render.yaml`**
    ```yaml
+   startCommand: "gunicorn --worker-class gthread --workers 1 --threads 4 --timeout 120 --bind 0.0.0.0:$PORT app:app"
    envVars:
      - key: PYTHON_VERSION
        value: "3.11.0"
@@ -42,28 +62,48 @@ Error compiling Cython file: undeclared name not builtin: long
 
 When deploying to Render, check the build logs for:
 ```
-Using Python version 3.11.9
+Using Python version 3.11.9 ✓
+Installing simple-websocket==1.0.0 ✓
+Installing python-engineio==4.8.0 ✓
+NOT installing gevent ✓
 ```
 
-If you still see Python 3.13, add this to your build command in `render.yaml`:
-```yaml
-buildCommand: |
-  pyenv install 3.11.9
-  pyenv global 3.11.9
-  pip install --upgrade pip
-  pip install -r requirements.txt
-  ...
+And in runtime logs:
+```
+Using worker class: gthread ✓
+Workers: 1, Threads: 4 ✓
+```
+
+Test WebSocket connection:
+```bash
+curl https://your-app.onrender.com/health
+```
+
+Should return:
+```json
+{
+  "status": "healthy",
+  "async_mode": "threading"
+}
 ```
 
 ## Why Python 3.11?
 
 - ✅ **Stable**: Well-tested with all dependencies
-- ✅ **Compatible**: Works with gevent, Flask-SocketIO, Selenium
+- ✅ **Compatible**: Works with Flask-SocketIO, Selenium, threading mode
 - ✅ **Render Support**: Fully supported on Render.com
 - ⚠️ **Python 3.13**: Too new, some packages not yet compatible
+
+## Why Threading Mode?
+
+- ✅ **Simplicity**: No monkey patching, straightforward concurrency
+- ✅ **Reliability**: Excellent WebSocket support with gunicorn gthread
+- ✅ **Compatibility**: Works perfectly with Python 3.11
+- ✅ **Performance**: Good for small-medium applications (free tier)
+- ⚠️ **Gevent**: More complex, had configuration issues with WebSocket
 
 ## Local Development
 
 This fix doesn't affect local development. You can use Python 3.11 or 3.12 locally.
 
-The gevent 24.2.1 works on both Python 3.11, 3.12, and 3.13.
+The threading mode works identically on all Python versions.
