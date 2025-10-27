@@ -920,25 +920,37 @@ HTML_TEMPLATE = '''
     </div>
     {% endif %}
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Set active nav item
-        $(document).ready(function() {
+        // Set active nav item (vanilla JavaScript - no jQuery required)
+        document.addEventListener('DOMContentLoaded', function() {
             const path = window.location.pathname;
-            $('.nav-link').removeClass('active');
+
+            // Remove active class from all nav links
+            document.querySelectorAll('.nav-link').forEach(function(link) {
+                link.classList.remove('active');
+            });
+
+            // Add active class to current page
             if (path === '/') {
-                $('#nav-dashboard').addClass('active');
+                const el = document.getElementById('nav-dashboard');
+                if (el) el.classList.add('active');
             } else if (path.includes('gates')) {
-                $('#nav-gates').addClass('active');
+                const el = document.getElementById('nav-gates');
+                if (el) el.classList.add('active');
             } else if (path.includes('transactions')) {
-                $('#nav-transactions').addClass('active');
+                const el = document.getElementById('nav-transactions');
+                if (el) el.classList.add('active');
             } else if (path.includes('members')) {
-                $('#nav-members').addClass('active');
+                const el = document.getElementById('nav-members');
+                if (el) el.classList.add('active');
             } else if (path.includes('visitor')) {
-                $('#nav-visitor').addClass('active');
+                const el = document.getElementById('nav-visitor');
+                if (el) el.classList.add('active');
             } else if (path.includes('directory')) {
-                $('#nav-directory').addClass('active');
+                const el = document.getElementById('nav-directory');
+                if (el) el.classList.add('active');
             }
         });
 
@@ -1474,13 +1486,16 @@ def dashboard():
         }
 
         // Auto-refresh occupancy and transactions after page loads
-        $(document).ready(function() {
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM loaded, initializing...');
+
             autoRefresh('occupancy-555', '/api/occupancy/4005', 5000);
             autoRefresh('occupancy-boa', '/api/occupancy/4007', 5000);
             autoRefresh('waiting-count', '/api/waiting-count', 5000);
             autoRefresh('recent-transactions', '/api/recent-transactions', 3000);
 
             // Start token countdown timer
+            console.log('Starting token countdown...');
             initTokenCountdown();
 
             // Check monitoring status every 5 seconds
