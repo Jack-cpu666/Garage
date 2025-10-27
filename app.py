@@ -35,8 +35,11 @@ BLACKLIST_FILE = "blacklist.json"
 member_plates = []
 blacklist_plates = []
 monitoring_active = False
+member_monitoring_active = False
 token_status = {'valid': False, 'last_check': None, 'last_refresh': None, 'error': None}
 token_monitor_thread = None
+member_monitor_thread = None
+last_activity = time.time()
 
 def load_members():
     """Load member plates from JSON file"""
@@ -376,19 +379,19 @@ def token_monitor_loop():
 def start_token_monitor():
     """Start the token monitoring thread"""
     global monitoring_active, token_monitor_thread
-    
+
     if not AUTO_TOKEN_REFRESH:
         logger.info("Auto token refresh disabled by configuration")
         return
-    
+
     if not HAS_SELENIUM:
         logger.warning("Auto token refresh unavailable - Selenium not installed")
         return
-    
+
     if monitoring_active:
         logger.info("Token monitor already running")
         return
-    
+
     monitoring_active = True
     token_monitor_thread = threading.Thread(target=token_monitor_loop, daemon=True)
     token_monitor_thread.start()
@@ -397,9 +400,153 @@ def start_token_monitor():
 def stop_token_monitor():
     """Stop the token monitoring thread"""
     global monitoring_active
-    
+
     monitoring_active = False
     logger.info("Token monitor stop requested")
+
+def get_active_visits(site_id):
+    """Get currently active visits (cars in garage/at gates)"""
+    url = f"{BASE_URL}/api/specialist/site/{site_id}/visits/closed?count=50&minPaymentDueAgeSeconds=0&zoneIds={site_id}"
+    headers = {
+        "Authorization": f"Bearer {AUTH_KEY}",
+        "Accept": "*/*",
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('success') and data.get('data'):
+                transactions = data['data'].get('transactions', [])
+                # Filter for transactions that can be vended
+                return [t for t in transactions if 'VEND_GATE' in t.get('availableActionsForSpecialist', [])]
+    except Exception as e:
+        logger.error(f"Error getting visits: {e}")
+    return []
+
+def member_monitoring_loop():
+    """Background thread to monitor for member vehicles and auto-open gates"""
+    global member_monitoring_active, last_activity
+
+    logger.info("🚗 Member auto-gate monitor started")
+    last_opened = {}
+
+    while member_monitoring_active:
+        try:
+            last_activity = time.time()  # Update activity timestamp
+
+            for site_id in ["4005", "4007"]:
+                transactions = get_active_visits(site_id)
+
+                if transactions:
+                    for transaction in transactions:
+                        vehicle = transaction.get('vehicle', {})
+                        license_plate_obj = vehicle.get('licensePlate', {}) if vehicle else {}
+                        plate = license_plate_obj.get('text', '').upper() if license_plate_obj else ''
+
+                        visit_id = transaction.get('id')
+
+                        images = transaction.get('images', {})
+                        exit_event = images.get('exitEvent') if images else None
+                        site_equipment = exit_event.get('siteEquipment') if exit_event else None
+                        lane_id = site_equipment.get('laneId') if site_equipment else None
+
+                        # CHECK BLACKLIST FIRST
+                        if plate and plate in [p.upper() for p in blacklist_plates]:
+                            if visit_id and visit_id not in last_opened:
+                                user = transaction.get('user', {})
+                                user_name = f"{user.get('firstName', '')} {user.get('lastName', '')}".strip()
+
+                                logger.warning(f"[BLOCKED] Blacklisted plate: {plate} ({user_name}) at site {site_id}")
+                                last_opened[visit_id] = time.time()
+
+                        # Check if plate is in member list
+                        elif plate and plate in [p.upper() for p in member_plates]:
+                            if visit_id and visit_id not in last_opened:
+                                user = transaction.get('user', {})
+                                user_name = f"{user.get('firstName', '')} {user.get('lastName', '')}".strip()
+
+                                logger.info(f"[AUTO-OPEN] Member detected: {plate} ({user_name}) at site {site_id}")
+
+                                # Open the gate
+                                if lane_id:
+                                    open_gate_internal(str(lane_id), f"Auto Lane {lane_id}", site_id=site_id, visit_id=visit_id)
+                                else:
+                                    default_lane = "5568" if site_id == "4005" else "5565"
+                                    open_gate_internal(default_lane, "Default Gate", site_id=site_id, visit_id=visit_id)
+
+                                last_opened[visit_id] = time.time()
+
+                # Clean up old entries (older than 10 minutes)
+                current_time = time.time()
+                last_opened = {k: v for k, v in last_opened.items() if current_time - v < 600}
+
+            time.sleep(3)  # Check every 3 seconds
+
+        except Exception as e:
+            logger.error(f"Member monitor error: {e}")
+            import traceback
+            traceback.print_exc()
+            time.sleep(5)
+
+    logger.info("Member monitoring stopped")
+
+def open_gate_internal(lane_id, gate_name, site_id=None, visit_id=None):
+    """Internal function to open gate (used by monitoring)"""
+    site = site_id if site_id else SITE_ID
+    endpoint = f"/api/specialist/site/{site}/lane/{lane_id}/open-gate"
+
+    if visit_id:
+        endpoint += f"?visitId={visit_id}"
+
+    url = BASE_URL + endpoint
+    headers = {
+        "Authorization": f"Bearer {AUTH_KEY}",
+        "Accept": "*/*",
+        "Content-Type": "application/json",
+        "Origin": "https://specialist.metropolis.io",
+        "Referer": "https://specialist.metropolis.io/",
+        "User-Agent": "Mozilla/5.0"
+    }
+
+    try:
+        response = requests.post(url, headers=headers, timeout=10)
+        if response.status_code in [200, 201, 204]:
+            logger.info(f"✅ Gate {gate_name} opened successfully")
+            return True
+        else:
+            logger.error(f"❌ Failed to open {gate_name}: {response.status_code}")
+            return False
+    except Exception as e:
+        logger.error(f"Error opening gate: {e}")
+        return False
+
+def start_member_monitoring():
+    """Start the member monitoring thread"""
+    global member_monitoring_active, member_monitor_thread
+
+    if member_monitoring_active:
+        logger.info("Member monitor already running")
+        return
+
+    member_monitoring_active = True
+    member_monitor_thread = threading.Thread(target=member_monitoring_loop, daemon=True)
+    member_monitor_thread.start()
+    logger.info("✅ Member auto-gate monitor started")
+
+def stop_member_monitoring():
+    """Stop the member monitoring thread"""
+    global member_monitoring_active
+
+    member_monitoring_active = False
+    logger.info("Member monitoring stop requested")
+
+def keep_alive_loop():
+    """Keep the app alive by updating activity timestamp"""
+    global last_activity
+    while True:
+        time.sleep(60)  # Update every minute
+        last_activity = time.time()
+        logger.debug(f"Keep-alive ping - Active monitors: Token={monitoring_active}, Members={member_monitoring_active}")
 
 def render_content(content, **kwargs):
     """Helper function to properly render content in the HTML template"""
@@ -704,8 +851,8 @@ HTML_TEMPLATE = '''
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="/cameras" id="nav-cameras">
-                            <i class="fas fa-video"></i> Cameras
+                        <a class="nav-link" href="/directory" id="nav-directory">
+                            <i class="fas fa-address-book"></i> Member Directory
                         </a>
                     </li>
                     <li class="nav-item">
@@ -772,8 +919,8 @@ HTML_TEMPLATE = '''
                 $('#nav-members').addClass('active');
             } else if (path.includes('visitor')) {
                 $('#nav-visitor').addClass('active');
-            } else if (path.includes('cameras')) {
-                $('#nav-cameras').addClass('active');
+            } else if (path.includes('directory')) {
+                $('#nav-directory').addClass('active');
             }
         });
 
@@ -951,47 +1098,71 @@ def dashboard():
             <h1 class="mb-4">Dashboard</h1>
         </div>
     </div>
-    
-    <!-- Token Status Card -->
+
+    <!-- System Status Cards -->
     <div class="row mb-4">
-        <div class="col-12">
+        <!-- Token Status Card -->
+        <div class="col-md-6">
             <div class="dashboard-card" style="border-left: 4px solid {{ '#43a047' if token_info.valid else '#e53935' }};">
-                <div class="row align-items-center">
-                    <div class="col-md-8">
-                        <h4>
-                            <i class="fas fa-key"></i> API Token Status
-                            {% if token_info.valid %}
-                                <span class="badge bg-success ms-2">Valid</span>
-                            {% else %}
-                                <span class="badge bg-danger ms-2">Invalid/Expired</span>
-                            {% endif %}
-                        </h4>
-                        <p class="mb-1">
-                            <strong>Last Check:</strong> {{ token_info.last_check }}<br>
-                            <strong>Last Refresh:</strong> {{ token_info.last_refresh }}<br>
-                            <strong>Auto-Refresh:</strong> 
-                            {% if token_info.auto_refresh %}
-                                <span class="text-success">Enabled (every 3 minutes)</span>
-                            {% elif not token_info.selenium_available %}
-                                <span class="text-warning">Disabled (Selenium not installed)</span>
-                            {% else %}
-                                <span class="text-muted">Disabled</span>
-                            {% endif %}
-                        </p>
-                        {% if token_info.error %}
-                        <div class="alert alert-warning mb-0 mt-2">
-                            <i class="fas fa-exclamation-triangle"></i> {{ token_info.error }}
-                        </div>
-                        {% endif %}
-                    </div>
-                    <div class="col-md-4 text-end">
-                        <button class="btn btn-primary me-2" onclick="testToken()">
-                            <i class="fas fa-check-circle"></i> Test Token
-                        </button>
-                        <button class="btn btn-success" onclick="refreshToken()" {% if not token_info.selenium_available %}disabled title="Selenium not installed"{% endif %}>
-                            <i class="fas fa-sync"></i> Get New Token
-                        </button>
-                    </div>
+                <h4>
+                    <i class="fas fa-key"></i> API Token Status
+                    {% if token_info.valid %}
+                        <span class="badge bg-success ms-2">✅ Valid</span>
+                    {% else %}
+                        <span class="badge bg-danger ms-2">❌ Invalid</span>
+                    {% endif %}
+                </h4>
+                <p class="mb-1">
+                    <strong>Last Check:</strong> {{ token_info.last_check }}<br>
+                    <strong>Last Refresh:</strong> {{ token_info.last_refresh }}<br>
+                    <strong>Auto-Refresh:</strong>
+                    {% if token_info.auto_refresh %}
+                        <span class="text-success"><i class="fas fa-check-circle"></i> Enabled (every 3 min)</span>
+                    {% elif not token_info.selenium_available %}
+                        <span class="text-warning"><i class="fas fa-exclamation-triangle"></i> Selenium not installed</span>
+                    {% else %}
+                        <span class="text-muted">Disabled</span>
+                    {% endif %}
+                </p>
+                {% if token_info.error %}
+                <div class="alert alert-warning mb-0 mt-2">
+                    <i class="fas fa-exclamation-triangle"></i> {{ token_info.error }}
+                </div>
+                {% endif %}
+                <div class="mt-3">
+                    <button class="btn btn-sm btn-primary me-2" onclick="testToken()">
+                        <i class="fas fa-check-circle"></i> Test Token
+                    </button>
+                    <button class="btn btn-sm btn-success" onclick="refreshToken()" {% if not token_info.selenium_available %}disabled title="Selenium not installed"{% endif %}>
+                        <i class="fas fa-sync"></i> Get New Token
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Member Auto-Gate Status Card -->
+        <div class="col-md-6">
+            <div class="dashboard-card" style="border-left: 4px solid #43a047;">
+                <h4>
+                    <i class="fas fa-car"></i> Member Auto-Gate Monitor
+                    <span class="badge bg-success ms-2" id="member-monitor-badge">✅ ACTIVE</span>
+                </h4>
+                <p class="mb-1" id="member-monitor-info">
+                    <strong>Status:</strong> <span class="text-success">Running in background</span><br>
+                    <strong>Monitoring:</strong> {{ member_count }} member plates<br>
+                    <strong>Blacklist:</strong> {{ blacklist_count }} blocked plates<br>
+                    <strong>Check Interval:</strong> Every 3 seconds
+                </p>
+                <div class="alert alert-info mb-0 mt-2">
+                    <i class="fas fa-info-circle"></i> Gates will auto-open for registered members
+                </div>
+                <div class="mt-3">
+                    <button class="btn btn-sm btn-danger" onclick="toggleMemberMonitoring()" id="member-monitor-btn">
+                        <i class="fas fa-stop"></i> Stop Monitoring
+                    </button>
+                    <a href="/members" class="btn btn-sm btn-primary">
+                        <i class="fas fa-users"></i> Manage Members
+                    </a>
                 </div>
             </div>
         </div>
@@ -1113,17 +1284,73 @@ def dashboard():
                 });
         }
 
+        // Toggle member monitoring
+        function toggleMemberMonitoring() {
+            const btn = document.getElementById('member-monitor-btn');
+            const badge = document.getElementById('member-monitor-badge');
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span> Processing...';
+
+            fetch('/api/toggle-member-monitoring', {method: 'POST'})
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        if (data.status === 'started') {
+                            badge.className = 'badge bg-success ms-2';
+                            badge.textContent = '✅ ACTIVE';
+                            btn.className = 'btn btn-sm btn-danger';
+                            btn.innerHTML = '<i class="fas fa-stop"></i> Stop Monitoring';
+                        } else {
+                            badge.className = 'badge bg-danger ms-2';
+                            badge.textContent = '❌ STOPPED';
+                            btn.className = 'btn btn-sm btn-success';
+                            btn.innerHTML = '<i class="fas fa-play"></i> Start Monitoring';
+                        }
+                    }
+                    btn.disabled = false;
+                })
+                .catch(error => {
+                    alert('Error toggling monitoring: ' + error);
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-stop"></i> Stop Monitoring';
+                });
+        }
+
         // Auto-refresh occupancy and transactions after page loads
         $(document).ready(function() {
             autoRefresh('occupancy-555', '/api/occupancy/4005', 5000);
             autoRefresh('occupancy-boa', '/api/occupancy/4007', 5000);
             autoRefresh('waiting-count', '/api/waiting-count', 5000);
             autoRefresh('recent-transactions', '/api/recent-transactions', 3000);
+
+            // Check monitoring status every 5 seconds
+            setInterval(function() {
+                fetch('/api/monitoring-status')
+                    .then(response => response.json())
+                    .then(data => {
+                        const badge = document.getElementById('member-monitor-badge');
+                        const btn = document.getElementById('member-monitor-btn');
+
+                        if (data.member_monitor) {
+                            badge.className = 'badge bg-success ms-2';
+                            badge.textContent = '✅ ACTIVE';
+                            btn.className = 'btn btn-sm btn-danger';
+                            btn.innerHTML = '<i class="fas fa-stop"></i> Stop Monitoring';
+                        } else {
+                            badge.className = 'badge bg-danger ms-2';
+                            badge.textContent = '❌ STOPPED';
+                            btn.className = 'btn btn-sm btn-success';
+                            btn.innerHTML = '<i class="fas fa-play"></i> Start Monitoring';
+                        }
+                    })
+                    .catch(error => console.error('Monitoring status check error:', error));
+            }, 5000);
         });
     </script>
     '''
-    
-    return render_content(content, member_count=len(member_plates), token_info=token_info)
+
+    return render_content(content, member_count=len(member_plates), blacklist_count=len(blacklist_plates), token_info=token_info)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -1458,14 +1685,14 @@ def visitor():
     '''
     return render_content(content)
 
-@app.route('/cameras')
+@app.route('/directory')
 @login_required
-def cameras():
+def directory():
     content = '''
     <div class="row">
         <div class="col-12">
             <h1 class="mb-4">
-                <i class="fas fa-users"></i> Member Directory
+                <i class="fas fa-address-book"></i> Member Directory
             </h1>
             <p class="text-muted">All members with active subscriptions or recent visits</p>
         </div>
@@ -1501,8 +1728,9 @@ def cameras():
                 });
         }
 
-        // Load immediately
+        // Load immediately and refresh every 30 seconds
         loadMemberDirectory();
+        setInterval(loadMemberDirectory, 30000);
     </script>
     '''
     return render_content(content)
@@ -1966,16 +2194,154 @@ def api_token_status():
         'selenium_available': HAS_SELENIUM
     })
 
+@app.route('/api/member-directory')
+@login_required
+def api_member_directory():
+    """Get all members with active subscriptions - matches WORKING_GATE_OPENER.py"""
+
+    def get_all_members(site_id):
+        """Get all members/users with active visits or subscriptions"""
+        url = f"{BASE_URL}/api/specialist/site/{site_id}/visits/closed?count=100&minPaymentDueAgeSeconds=0&zoneIds={site_id}"
+        headers = {
+            "Authorization": f"Bearer {AUTH_KEY}",
+            "Accept": "*/*",
+        }
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('success') and data.get('data'):
+                    transactions = data['data'].get('transactions', [])
+                    # Filter for members only
+                    members = []
+                    seen_users = set()
+                    for t in transactions:
+                        user = t.get('user', {})
+                        if user.get('isMember') and user.get('phoneNumber') not in seen_users:
+                            member_info = {
+                                'user': user,
+                                'vehicle': t.get('vehicle', {}),
+                                'hasSubscription': user.get('hasSubscription', False),
+                                'lastVisit': t.get('end'),
+                                'coveredBySubscription': t.get('coveredBySubscription', False)
+                            }
+                            members.append(member_info)
+                            seen_users.add(user.get('phoneNumber'))
+                    return members
+        except Exception as e:
+            logger.error(f"Error getting members: {e}")
+        return []
+
+    html = ''
+
+    for site_id in ["4005", "4007"]:
+        site_name = "555 Capitol Mall" if site_id == "4005" else "Bank of America"
+        members = get_all_members(site_id)
+
+        if members:
+            html += f'''
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        color: white; padding: 15px 20px; margin: 20px 0 15px 0;
+                        border-radius: 10px; font-weight: bold; font-size: 1.2rem;">
+                <i class="fas fa-building"></i> {site_name} - {len(members)} Members
+            </div>
+            '''
+
+            for idx, member in enumerate(members, 1):
+                user = member['user']
+                vehicle = member['vehicle']
+
+                # User info
+                name = f"{user.get('firstName', '')} {user.get('lastName', '')}".strip()
+                phone = user.get('phoneNumber', 'N/A')
+                has_sub = "✅ YES" if member['hasSubscription'] else "❌ NO"
+
+                # Vehicle info
+                plate_obj = vehicle.get('licensePlate', {})
+                plate = plate_obj.get('text', 'N/A')
+                state = plate_obj.get('state', {}).get('name', '')
+
+                make_obj = vehicle.get('make', {})
+                make = make_obj.get('name', 'Unknown') if make_obj else 'Unknown'
+
+                model_obj = vehicle.get('model', {})
+                model = model_obj.get('name', 'Unknown') if model_obj else 'Unknown'
+
+                color = vehicle.get('color', 'Unknown')
+
+                # Last visit time
+                last_visit_ms = member.get('lastVisit')
+                if last_visit_ms:
+                    last_visit = datetime.fromtimestamp(last_visit_ms / 1000).strftime('%Y-%m-%d %H:%M')
+                else:
+                    last_visit = 'N/A'
+
+                html += f'''
+                <div class="dashboard-card" style="margin-bottom: 15px;">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h5 style="color: #667eea;"><i class="fas fa-user"></i> {name}</h5>
+                            <p class="mb-1"><strong>Phone:</strong> {phone}</p>
+                            <p class="mb-1"><strong>Subscription:</strong> {has_sub}</p>
+                            <p class="mb-1"><strong>Last Visit:</strong> {last_visit}</p>
+                        </div>
+                        <div class="col-md-6">
+                            <h5 style="color: #764ba2;"><i class="fas fa-car"></i> Vehicle</h5>
+                            <p class="mb-1"><strong>Plate:</strong>
+                                <span style="background: #1E88E5; color: white; padding: 3px 10px; border-radius: 5px; font-weight: bold;">
+                                    {plate}
+                                </span>
+                                <span style="background: white; color: black; border: 1px solid #ccc; padding: 3px 8px; border-radius: 3px; font-weight: bold; margin-left: 5px;">
+                                    {state}
+                                </span>
+                            </p>
+                            <p class="mb-1"><strong>Vehicle:</strong> {color} {make} {model}</p>
+                        </div>
+                    </div>
+                </div>
+                '''
+
+    if not html:
+        html = '<div class="alert alert-info">No members found</div>'
+
+    return jsonify({'html': html})
+
+@app.route('/api/monitoring-status')
+@login_required
+def api_monitoring_status():
+    """Get status of all background monitors"""
+    return jsonify({
+        'token_monitor': monitoring_active,
+        'member_monitor': member_monitoring_active,
+        'selenium_available': HAS_SELENIUM,
+        'member_count': len(member_plates),
+        'blacklist_count': len(blacklist_plates),
+        'last_activity': datetime.fromtimestamp(last_activity).isoformat()
+    })
+
+@app.route('/api/toggle-member-monitoring', methods=['POST'])
+@login_required
+def api_toggle_member_monitoring():
+    """Toggle member auto-gate monitoring"""
+    global member_monitoring_active
+
+    if member_monitoring_active:
+        stop_member_monitoring()
+        return jsonify({'success': True, 'status': 'stopped'})
+    else:
+        start_member_monitoring()
+        return jsonify({'success': True, 'status': 'started'})
+
 if __name__ == '__main__':
     logger.info("="*60)
     logger.info("METROPOLIS PARKING MANAGEMENT SYSTEM - WEB APP")
     logger.info("="*60)
 
     # Load members and blacklist from files
-    logger.info("Loading member and blacklist data...")
+    logger.info("📁 Loading member and blacklist data...")
     load_members()
     load_blacklist()
-    logger.info(f"Loaded {len(member_plates)} members and {len(blacklist_plates)} blacklisted plates")
+    logger.info(f"✅ Loaded {len(member_plates)} members and {len(blacklist_plates)} blacklisted plates")
 
     # Try to load token from file if it exists
     try:
@@ -1985,23 +2351,41 @@ if __name__ == '__main__':
                 AUTH_KEY = saved_token
                 logger.info(f"✅ Loaded token from auth_token.txt (length: {len(saved_token)})")
             else:
-                logger.warning("Token in auth_token.txt appears invalid")
+                logger.warning("⚠️ Token in auth_token.txt appears invalid")
     except FileNotFoundError:
-        logger.info("No auth_token.txt found, using environment token")
+        logger.info("ℹ️ No auth_token.txt found, using environment token")
     except Exception as e:
-        logger.warning(f"Could not load token from file: {e}")
+        logger.warning(f"⚠️ Could not load token from file: {e}")
 
     # Start token monitor if enabled
     if AUTO_TOKEN_REFRESH:
-        logger.info("Starting automatic token monitoring...")
+        logger.info("🔄 Starting automatic token monitoring...")
         start_token_monitor()
+    else:
+        logger.info("ℹ️ Auto token refresh is disabled")
+
+    # Start member auto-gate monitoring (always enabled by default)
+    logger.info("🚗 Starting member auto-gate monitoring...")
+    start_member_monitoring()
+
+    # Start keep-alive thread
+    logger.info("💓 Starting keep-alive monitor...")
+    keep_alive_thread = threading.Thread(target=keep_alive_loop, daemon=True)
+    keep_alive_thread.start()
 
     # Verify initial token
-    logger.info("Verifying initial token...")
+    logger.info("🔍 Verifying initial token...")
     verify_token()
+
+    logger.info("="*60)
+    logger.info("🎉 ALL BACKGROUND SERVICES STARTED")
+    logger.info(f"   - Token Monitor: {'✅ ACTIVE' if monitoring_active else '❌ INACTIVE'}")
+    logger.info(f"   - Member Auto-Gate: {'✅ ACTIVE' if member_monitoring_active else '❌ INACTIVE'}")
+    logger.info(f"   - Keep-Alive: ✅ ACTIVE")
+    logger.info("="*60)
 
     # Start Flask app
     port = int(os.environ.get('PORT', 10000))
-    logger.info(f"Starting Flask app on port {port}...")
+    logger.info(f"🚀 Starting Flask app on port {port}...")
     logger.info("="*60)
     app.run(host='0.0.0.0', port=port, debug=False)

@@ -1,279 +1,421 @@
-# Metropolis Parking Management System
+# Metropolis Parking Management System - Web Application
 
-Web-based gate control and parking management dashboard for Metropolis parking systems.
+## 🚀 Overview
 
-## Features
+This is a comprehensive web-based parking management system for Metropolis parking garages. The system features **persistent background monitoring** that continues to work even when you close your browser.
 
-✅ **Gate Controls** - Open gates remotely at multiple sites
-✅ **Auto-Monitoring** - Automatically open gates for whitelisted members
-✅ **Blacklist Management** - Block specific vehicles
-✅ **Token Auto-Refresh** - Automatic authentication token renewal every hour
-✅ **Real-time Updates** - WebSocket-based live monitoring
-✅ **Recent Visits** - View parking activity
-✅ **Occupancy Tracking** - Monitor garage capacity
-✅ **Emergency Controls** - Open all gates simultaneously
+### Key Features
 
-## Architecture
+- ✅ **Auto Token Refresh** - Automatically refreshes authentication tokens every 3 minutes
+- ✅ **Member Auto-Gate** - Automatically opens gates for registered members
+- ✅ **Blacklist Management** - Blocks specific vehicles from entry
+- ✅ **Member Directory** - View all members with subscriptions
+- ✅ **Real-time Activity** - Live vehicle entry/exit monitoring with camera images
+- ✅ **Multi-Site Support** - Manages multiple parking sites (555 Capitol Mall & Bank of America)
+- ✅ **Background Processing** - All monitoring continues in the background server-side
 
-- **Backend**: Flask + Flask-SocketIO
-- **Frontend**: HTML/CSS/JavaScript with Socket.IO
-- **Authentication**: JWT token-based (auto-refresh)
-- **Real-time**: WebSocket communication
-- **Storage**: JSON file-based (members, blacklist)
+---
 
-## Deployment on Render.com
+## 🔧 What Was Fixed
 
-### Method 1: Using render.yaml (Recommended)
+### The Problem
 
-1. **Push to GitHub**
-   ```bash
-   cd render.com
-   git init
-   git add .
-   git commit -m "Initial commit"
-   git remote add origin https://github.com/yourusername/metropolis-gate-control.git
-   git push -u origin main
-   ```
+The previous web version had a critical issue: **background tasks would stop when the browser was closed**. This is because:
 
-2. **Connect to Render**
-   - Go to [Render Dashboard](https://dashboard.render.com/)
-   - Click "New" → "Blueprint"
-   - Connect your GitHub repository
-   - Render will automatically detect `render.yaml`
+1. Web browsers only run JavaScript while the page is open
+2. If the server goes to sleep (common on free hosting like Render.com), all background threads stop
+3. The token auto-refresh and member monitoring were not persistent
 
-3. **Set Environment Variables**
-   - In Render dashboard, go to your service
-   - Navigate to "Environment" tab
-   - Add these variables:
-     ```
-     DASHBOARD_PASSWORD=your-secure-password
-     METROPOLIS_EMAIL=security@555capitolmall.com
-     METROPOLIS_PASSWORD=555_Security
-     AUTH_KEY=(leave empty for first run)
-     ```
+### The Solution
 
-4. **Deploy**
-   - Render will automatically build and deploy
-   - Wait for build to complete (~5-10 minutes)
-   - Your app will be available at `https://your-app-name.onrender.com`
+The updated version now includes:
 
-### Method 2: Manual Setup
+1. **Server-Side Background Threads**
+   - Token monitoring runs server-side (not in browser)
+   - Member auto-gate monitoring runs server-side
+   - Keep-alive mechanism prevents server sleep
 
-1. **Create Web Service**
-   - Go to Render Dashboard
-   - Click "New" → "Web Service"
-   - Connect your GitHub repository
+2. **Persistent Monitoring**
+   - Token check: Every 3 minutes
+   - Member auto-gate check: Every 3 seconds
+   - Keep-alive ping: Every 60 seconds
 
-2. **Configure Service**
-   - **Name**: metropolis-gate-control
-   - **Environment**: Python 3
-   - **Build Command**:
-     ```bash
-     pip install --upgrade pip && pip install -r requirements.txt
-     ```
-   - **Start Command**:
-     ```bash
-     gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:$PORT app:app
-     ```
+3. **Automatic Token Management**
+   - Detects token expiration (5-minute buffer)
+   - Automatically logs in via headless browser
+   - Captures fresh token via JavaScript injection
+   - Updates all API calls with new token
 
-3. **Add Environment Variables** (same as above)
+4. **Member Auto-Gate System**
+   - Continuously monitors active visits
+   - Checks member plates against registered list
+   - Checks blacklist first (takes priority)
+   - Opens appropriate gate automatically
+   - Prevents duplicate gate operations
 
-4. **Deploy**
+---
 
-## Local Development
+## 📋 Requirements
 
-1. **Clone Repository**
-   ```bash
-   git clone https://github.com/yourusername/metropolis-gate-control.git
-   cd metropolis-gate-control
-   ```
-
-2. **Install Dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Install Chrome/Chromium** (for token refresh)
-   - **Windows**: Download Chrome from [google.com/chrome](https://www.google.com/chrome/)
-   - **macOS**: `brew install --cask google-chrome`
-   - **Linux**: `sudo apt-get install google-chrome-stable chromium-chromedriver`
-
-4. **Set Environment Variables**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your credentials
-   ```
-
-5. **Run Application**
-   ```bash
-   python app.py
-   ```
-
-6. **Access Dashboard**
-   - Open browser to `http://localhost:5000`
-   - Login with password from `.env`
-
-## Usage Guide
-
-### First-Time Setup
-
-1. **Login**
-   - Use the password set in `DASHBOARD_PASSWORD` environment variable
-   - Default: `metropolis123`
-
-2. **Start Token Auto-Monitor**
-   - Go to "Token Mgmt" tab
-   - Click "Start Auto-Monitor"
-   - This will automatically refresh your auth token every hour
-
-3. **Add Members**
-   - Go to "Members" tab
-   - Enter license plates of authorized members
-   - Click "Add Member"
-
-4. **Enable Auto-Monitoring**
-   - Go to "Auto-Monitor" tab
-   - Click "Start Monitoring"
-   - Gates will now auto-open for whitelisted members
-
-### Daily Operation
-
-- **Manual Gate Control**: Use "Gate Controls" tab to open gates manually
-- **Monitor Activity**: Check "Recent Visits" and "Occupancy" tabs
-- **Emergency**: Use "Emergency" tab to open all gates at once
-
-### Security Notes
-
-⚠️ **IMPORTANT SECURITY CONSIDERATIONS**:
-
-1. **Change Default Password**: Always set a strong `DASHBOARD_PASSWORD`
-2. **HTTPS Only**: Always use HTTPS in production (Render provides this automatically)
-3. **Authorized Personnel**: Only share access with authorized security staff
-4. **Token Security**: Never commit `AUTH_KEY` to version control
-5. **Audit Logs**: All actions are logged to console (check Render logs)
-
-## File Structure
-
-```
-render.com/
-├── app.py                 # Main Flask application
-├── requirements.txt       # Python dependencies
-├── render.yaml           # Render deployment config
-├── README.md             # This file
-├── .env.example          # Environment variables template
-│
-├── utils/                # Backend utilities
-│   ├── __init__.py
-│   ├── gate_control.py   # Gate API functions
-│   ├── token_manager.py  # JWT token management
-│   ├── monitoring.py     # Auto-monitoring logic
-│   └── token_monitor.py  # Token auto-refresh
-│
-├── templates/            # HTML templates
-│   ├── login.html        # Login page
-│   └── dashboard.html    # Main dashboard
-│
-├── static/               # Static assets
-│   ├── css/
-│   │   └── style.css     # Styles
-│   └── js/
-│       └── app.js        # Frontend JavaScript
-│
-└── data/                 # Data storage (auto-created)
-    ├── memberships.json  # Member license plates
-    └── blacklist.json    # Blacklisted plates
+### Python Packages
+```bash
+pip install flask requests selenium
 ```
 
-## API Endpoints
+### Browser Driver (for auto token refresh)
+Choose ONE of the following:
 
-### Authentication
-- `GET /` - Redirect to login or dashboard
-- `POST /login` - Login with password
-- `GET /logout` - Logout
+- **Chrome/Chromium** (recommended for Linux servers)
+  ```bash
+  # Install Chrome and ChromeDriver
+  wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+  sudo apt-get install ./google-chrome-stable_current_amd64.deb
+  ```
 
-### Gate Controls
-- `GET /api/gates` - List all gates
-- `POST /api/gate/open` - Open a specific gate
-- `GET /api/occupancy/<site_id>` - Get occupancy data
-- `GET /api/visits/<site_id>` - Get recent visits
-- `GET /api/waiting/<site_id>` - Get cars waiting at exit
+- **Edge** (recommended for Windows)
+  - Install Microsoft Edge browser
+  - Edge WebDriver is usually included
 
-### Members & Blacklist
-- `GET /api/members` - List member plates
-- `POST /api/members/add` - Add member
-- `POST /api/members/remove` - Remove member
-- `GET /api/blacklist` - List blacklisted plates
-- `POST /api/blacklist/add` - Add to blacklist
-- `POST /api/blacklist/remove` - Remove from blacklist
+- **Firefox**
+  - Install Firefox browser
+  - Download geckodriver
 
-### Token Management
-- `GET /api/token/status` - Get token expiration info
-- `POST /api/token/refresh` - Manually refresh token
-- `GET /api/member-directory/<site_id>` - Get all members at site
+---
 
-### WebSocket Events
-- `connect` - Client connected
-- `start_monitoring` - Start auto-monitoring
-- `stop_monitoring` - Stop auto-monitoring
-- `start_token_monitor` - Start token auto-refresh
-- `stop_token_monitor` - Stop token auto-refresh
-- `monitoring_update` - Real-time monitoring updates
-- `token_update` - Token status updates
+## 🚀 Quick Start
 
-## Troubleshooting
+### 1. Clone and Setup
+
+```bash
+cd /path/to/Garage-main
+pip install -r requirements.txt
+```
+
+### 2. Configure Environment Variables
+
+Create a `.env` file or set these environment variables:
+
+```bash
+# Required
+AUTH_KEY="your-jwt-token-here"
+EMAIL="your-metropolis-email@example.com"
+PASSWORD="your-metropolis-password"
+ADMIN_PASSWORD="your-dashboard-password"
+
+# Optional
+BASE_URL="https://specialist.api.metropolis.io"
+SITE_ID="4005"
+PORT="10000"
+AUTO_TOKEN_REFRESH="true"
+```
+
+### 3. Run the Application
+
+**Development:**
+```bash
+python app.py
+```
+
+**Production (Recommended):**
+```bash
+gunicorn app:app --bind 0.0.0.0:10000 --workers 1 --timeout 120
+```
+
+> ⚠️ **IMPORTANT**: Use `--workers 1` to ensure background threads persist. Multiple workers will create duplicate monitoring threads.
+
+### 4. Access the Dashboard
+
+Open your browser to:
+```
+http://localhost:10000
+```
+
+Login with your `ADMIN_PASSWORD`.
+
+---
+
+## 🌐 Deployment
+
+### Render.com Deployment
+
+1. **Create `render.yaml`** (already included):
+```yaml
+services:
+  - type: web
+    name: metropolis-parking
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python app.py"
+    envVars:
+      - key: AUTH_KEY
+        sync: false
+      - key: EMAIL
+        sync: false
+      - key: PASSWORD
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: AUTO_TOKEN_REFRESH
+        value: "true"
+```
+
+2. **Push to GitHub**
+3. **Connect to Render.com**
+4. **Set Environment Variables** in Render dashboard
+5. **Deploy**
+
+### Important for Production
+
+- ✅ Set `AUTO_TOKEN_REFRESH=true` to enable automatic token refresh
+- ✅ Install Chrome/ChromeDriver for headless browser token capture
+- ✅ Use a persistent hosting service (not free tiers that sleep)
+- ✅ Monitor logs to ensure background services start correctly
+
+---
+
+## 📱 Features Explained
+
+### 1. Dashboard
+- **Token Status** - Shows current API token validity and auto-refresh status
+- **Member Monitor Status** - Shows if auto-gate monitoring is active
+- **Live Stats** - Current occupancy, waiting cars, member count
+- **Quick Actions** - Fast access to common operations
+
+### 2. Gate Controls
+- Manual gate control for all locations:
+  - 555 Capitol Mall (6th Street Exit, L Street Exit)
+  - Bank of America (Main Exit)
+
+### 3. Transactions
+- Live vehicle activity with camera images
+- Entry/Exit events with timestamps
+- License plate recognition
+- Filter by plate, site, or type
+
+### 4. Members Management
+- **Members Tab**:
+  - Add/remove member plates
+  - Auto-gate opens for registered members
+- **Blacklist Tab**:
+  - Add/remove blocked vehicles
+  - Blacklist takes priority over members
+
+### 5. Visitor Pass
+- Create temporary access passes
+- Set duration (1-24 hours)
+- Site-specific passes
+
+### 6. Member Directory
+- View all members with active subscriptions
+- See vehicle details (make, model, color, plate)
+- Phone numbers and last visit times
+- Auto-refreshes every 30 seconds
+
+---
+
+## 🔍 Background Services Explained
+
+### Token Monitor (Every 3 minutes)
+```python
+while monitoring_active:
+    1. Check if token is expired (or expires within 5 minutes)
+    2. If expired:
+       - Launch headless browser
+       - Auto-login to Metropolis
+       - Inject JavaScript to capture token
+       - Update AUTH_KEY globally
+       - Save to file for persistence
+    3. Sleep for 3 minutes
+```
+
+### Member Auto-Gate Monitor (Every 3 seconds)
+```python
+while member_monitoring_active:
+    For each site (4005, 4007):
+        1. Get active visits (cars at gates)
+        2. Extract license plate
+        3. Check blacklist FIRST:
+           - If blacklisted: LOG and DENY
+        4. Check member list:
+           - If member: AUTO-OPEN gate
+        5. Track opened gates (prevent duplicates)
+    Sleep for 3 seconds
+```
+
+### Keep-Alive Monitor (Every 60 seconds)
+```python
+while True:
+    1. Update activity timestamp
+    2. Log status of all monitors
+    3. Sleep for 60 seconds
+```
+
+---
+
+## 🛠️ Troubleshooting
 
 ### Token Refresh Not Working
 
-**Problem**: Selenium can't find Chrome/Chromium
+**Symptom:** Token expires and doesn't auto-refresh
 
-**Solution**:
-- On Render: The `render.yaml` includes Chrome installation
-- Locally: Install Chrome browser and chromedriver
+**Solutions:**
+1. Check Selenium is installed: `pip install selenium`
+2. Verify browser driver is installed (Chrome/Edge/Firefox)
+3. Check logs for token refresh errors
+4. Verify `AUTO_TOKEN_REFRESH=true` in environment
+5. Manually test with "Get New Token" button
 
-### Monitoring Not Detecting Members
+### Member Auto-Gate Not Working
 
-**Problem**: Members added but gates not opening
+**Symptom:** Gates don't open for members
 
-**Solution**:
-1. Ensure "Start Monitoring" is clicked
-2. Check member license plates are exact matches (case-insensitive)
-3. Check console logs for errors
+**Solutions:**
+1. Check member plates are added correctly (all uppercase)
+2. Verify member monitoring status on dashboard (should show ✅ ACTIVE)
+3. Check server logs for "[AUTO-OPEN]" messages
+4. Ensure members are at the EXIT gate (not entry)
+5. Verify member vehicles have active transactions
 
-### Can't Login
+### Server Goes to Sleep
 
-**Problem**: Dashboard password not working
+**Symptom:** Everything stops working after inactivity
 
-**Solution**:
-- Check `DASHBOARD_PASSWORD` environment variable in Render
-- Default is `metropolis123`
+**Solutions:**
+1. **Use paid hosting** - Free tiers often sleep after 15 minutes
+2. Set up external monitoring (UptimeRobot, etc.)
+3. Use a cron job to ping your server every 5 minutes
+4. Consider using a VPS or dedicated server
 
-### Deployment Fails on Render
+### Background Services Stop
 
-**Problem**: Build fails or app crashes
+**Symptom:** Monitoring shows ❌ STOPPED on dashboard
 
-**Solution**:
-1. Check Render logs for specific error
-2. Ensure all environment variables are set
-3. Verify `requirements.txt` has correct versions
-4. Check that Chrome installation succeeded in build logs
+**Solutions:**
+1. Check server logs for errors
+2. Restart the application
+3. Verify `--workers 1` in production (not multiple workers)
+4. Check for exceptions in monitoring loops
 
-## Support & Contributing
+---
 
-This is an internal security tool for 555 Capitol Mall parking management.
+## 📊 API Endpoints
 
-For issues or improvements:
-1. Check Render logs first
-2. Verify all environment variables are set correctly
-3. Test locally before deploying changes
+### Gate Control
+- `POST /api/open-gate` - Open a specific gate
+- `GET /api/occupancy/<site_id>` - Get current occupancy
+- `GET /api/waiting-count` - Get cars waiting at exit
 
-## License
+### Member Management
+- `POST /api/members/add` - Add member plate
+- `POST /api/members/remove` - Remove member plate
+- `POST /api/blacklist/add` - Add to blacklist
+- `POST /api/blacklist/remove` - Remove from blacklist
 
-Proprietary - For authorized use only.
+### Monitoring
+- `GET /api/monitoring-status` - Get status of all monitors
+- `POST /api/toggle-member-monitoring` - Start/stop member monitoring
+- `GET /api/token-status` - Get current token status
+- `POST /api/refresh-token` - Manually refresh token
 
-## Credits
+### Data
+- `GET /api/member-directory` - Get all members
+- `POST /api/recent-activity` - Get recent vehicle activity
+- `GET /api/recent-transactions` - Get recent transactions
 
-Built with:
-- Flask (Web framework)
-- Socket.IO (Real-time communication)
-- Selenium (Token automation)
-- Metropolis API (Gate control)
+---
+
+## 🔒 Security Notes
+
+- ✅ Password-protected admin dashboard
+- ✅ Session-based authentication
+- ✅ Tokens stored securely in environment variables
+- ⚠️ Use HTTPS in production
+- ⚠️ Keep credentials in `.env` file (not in code)
+- ⚠️ Don't commit `.env` to Git
+
+---
+
+## 📝 File Structure
+
+```
+Garage-main/
+├── app.py                     # Main Flask application
+├── WORKING_GATE_OPENER.py     # Original desktop version (reference)
+├── memberships.json           # Member plates storage
+├── blacklist.json             # Blacklisted plates storage
+├── auth_token.txt             # Current auth token (auto-created)
+├── utils/
+│   ├── token_manager.py       # Token refresh functions
+│   ├── token_monitor.py       # Token monitoring thread
+│   ├── gate_control.py        # Gate API functions
+│   └── monitoring.py          # Member monitoring functions
+├── requirements.txt           # Python dependencies
+├── render.yaml                # Render.com deployment config
+└── README.md                  # This file
+```
+
+---
+
+## 🎯 Differences from Desktop Version
+
+| Feature | Desktop (Tkinter) | Web Version |
+|---------|-------------------|-------------|
+| **Interface** | Desktop GUI | Web Browser |
+| **Accessibility** | Local machine only | Accessible from anywhere |
+| **Background Tasks** | Works as long as app runs | Works as long as server runs |
+| **Multi-User** | Single user | Multiple users (login required) |
+| **Platform** | Windows/Mac/Linux | Any device with browser |
+| **Updates** | Requires restart | Hot reload in browser |
+
+---
+
+## 💡 Best Practices
+
+1. **Always use production server** (not free tier that sleeps)
+2. **Monitor logs regularly** for "[AUTO-OPEN]" and "[TOKEN CHECK]" messages
+3. **Keep member list updated** - add/remove as needed
+4. **Check dashboard daily** to ensure monitors are active
+5. **Use blacklist carefully** - it overrides member access
+6. **Backup `memberships.json` and `blacklist.json` regularly**
+
+---
+
+## 🆘 Support
+
+If you encounter issues:
+
+1. Check the **Troubleshooting** section above
+2. Review server logs for error messages
+3. Test manually with "Get New Token" button
+4. Verify environment variables are set correctly
+5. Ensure Selenium and browser driver are installed
+
+---
+
+## 📜 License
+
+This software is for authorized use only. Ensure you have proper authorization to access Metropolis API and control parking gates.
+
+---
+
+## ✅ Changelog
+
+### v2.0 (Current) - Background Services Update
+- ✅ Added persistent server-side token monitoring
+- ✅ Added member auto-gate monitoring
+- ✅ Added keep-alive mechanism
+- ✅ Fixed browser closing issue
+- ✅ Improved dashboard with monitoring status
+- ✅ Renamed "Cameras" to "Member Directory"
+- ✅ Added blacklist priority check
+- ✅ Enhanced logging and error handling
+
+### v1.0 - Initial Web Version
+- Basic web interface
+- Manual gate controls
+- Token management
+- Member list management
+
+---
+
+**Made with ❤️ for 555 Capitol Mall & Bank of America Parking**
