@@ -127,16 +127,20 @@ def verify_token():
             return True
         elif response.status_code == 401:
             token_status['valid'] = False
+            token_status['last_check'] = datetime.now()  # Update last check even when invalid
             token_status['error'] = 'Token expired or invalid'
             logger.warning(f"❌ Token is invalid/expired - Response: {response.text[:200]}")
             return False
         else:
+            token_status['last_check'] = datetime.now()  # Update last check even on unexpected status
             error_msg = f'Unexpected status: {response.status_code}'
             token_status['error'] = error_msg
             logger.warning(f"⚠️ {error_msg} - Response: {response.text[:200]}")
             return False
 
     except Exception as e:
+        token_status['valid'] = False
+        token_status['last_check'] = datetime.now()  # Update last check even on error
         token_status['error'] = str(e)
         logger.error(f"Error verifying token: {e}")
         return False
@@ -1127,8 +1131,8 @@ def dashboard():
                     {% endif %}
                 </h4>
                 <p class="mb-1">
-                    <strong>Last Check:</strong> {{ token_info.last_check }}<br>
-                    <strong>Last Refresh:</strong> {{ token_info.last_refresh }}<br>
+                    <strong>Last Check:</strong> <span id="last-check-time">{{ token_info.last_check }}</span><br>
+                    <strong>Last Refresh:</strong> <span id="last-refresh-time">{{ token_info.last_refresh }}</span><br>
                     <strong>Auto-Refresh:</strong>
                     {% if token_info.auto_refresh %}
                         <span class="text-success"><i class="fas fa-check-circle"></i> Enabled (every 3 min)</span>
@@ -1138,6 +1142,28 @@ def dashboard():
                         <span class="text-muted">Disabled</span>
                     {% endif %}
                 </p>
+
+                <!-- Countdown Timer with Spinner -->
+                {% if token_info.auto_refresh %}
+                <div class="alert alert-info mb-2 mt-3" id="token-countdown-container">
+                    <div class="d-flex align-items-center">
+                        <div class="spinner-border spinner-border-sm text-primary me-2" role="status" id="token-spinner">
+                            <span class="visually-hidden">Checking...</span>
+                        </div>
+                        <div style="flex-grow: 1;">
+                            <strong><i class="fas fa-clock"></i> Next check in: <span id="token-countdown" class="text-primary">3:00</span></strong><br>
+                            <small class="text-muted" id="token-status-text">Waiting for next automatic check...</small>
+                        </div>
+                    </div>
+                    <div class="progress mt-2" style="height: 8px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated bg-info"
+                             id="token-progress"
+                             role="progressbar"
+                             style="width: 100%"></div>
+                    </div>
+                </div>
+                {% endif %}
+
                 {% if token_info.error %}
                 <div class="alert alert-warning mb-0 mt-2">
                     <i class="fas fa-exclamation-triangle"></i> {{ token_info.error }}
@@ -1331,12 +1357,108 @@ def dashboard():
                 });
         }
 
+        // Token Countdown Timer
+        let lastCheckTime = null;
+        let countdownInterval = null;
+
+        function updateTokenCountdown() {
+            const countdownEl = document.getElementById('token-countdown');
+            const progressEl = document.getElementById('token-progress');
+            const statusTextEl = document.getElementById('token-status-text');
+            const spinnerEl = document.getElementById('token-spinner');
+
+            if (!countdownEl || !lastCheckTime) return;
+
+            const now = new Date().getTime();
+            const timeSinceCheck = Math.floor((now - lastCheckTime) / 1000); // seconds
+            const timeUntilNext = Math.max(0, 180 - timeSinceCheck); // 180 seconds = 3 minutes
+
+            const minutes = Math.floor(timeUntilNext / 60);
+            const seconds = timeUntilNext % 60;
+
+            // Update countdown display
+            countdownEl.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+
+            // Update progress bar (inverse - starts at 100%, goes to 0%)
+            const progressPercent = (timeUntilNext / 180) * 100;
+            progressEl.style.width = progressPercent + '%';
+
+            // Change color as time runs out
+            if (timeUntilNext <= 30) {
+                progressEl.className = 'progress-bar progress-bar-striped progress-bar-animated bg-warning';
+                statusTextEl.textContent = 'Checking soon...';
+            } else if (timeUntilNext <= 10) {
+                progressEl.className = 'progress-bar progress-bar-striped progress-bar-animated bg-danger';
+                statusTextEl.textContent = 'Checking now...';
+            } else {
+                progressEl.className = 'progress-bar progress-bar-striped progress-bar-animated bg-info';
+                statusTextEl.textContent = 'Waiting for next automatic check...';
+            }
+
+            // When countdown reaches 0, fetch new status
+            if (timeUntilNext === 0) {
+                statusTextEl.textContent = '🔄 Checking token now...';
+                spinnerEl.style.display = 'block';
+
+                // Fetch updated token status
+                setTimeout(function() {
+                    fetch('/api/token-status')
+                        .then(response => response.json())
+                        .then(data => {
+                            // Update last check time
+                            if (data.last_check && data.last_check !== 'Never') {
+                                lastCheckTime = new Date(data.last_check).getTime();
+                                document.getElementById('last-check-time').textContent = data.last_check;
+                            }
+
+                            // Update last refresh time
+                            if (data.last_refresh && data.last_refresh !== 'Never') {
+                                document.getElementById('last-refresh-time').textContent = data.last_refresh;
+                            }
+
+                            spinnerEl.style.display = 'none';
+                        })
+                        .catch(error => {
+                            console.error('Token status fetch error:', error);
+                            spinnerEl.style.display = 'none';
+                        });
+                }, 2000);
+            }
+        }
+
+        function initTokenCountdown() {
+            // Get initial last check time from the page
+            const lastCheckText = document.getElementById('last-check-time').textContent;
+
+            if (lastCheckText && lastCheckText !== 'Never') {
+                try {
+                    lastCheckTime = new Date(lastCheckText).getTime();
+                } catch (e) {
+                    console.error('Could not parse last check time:', e);
+                    lastCheckTime = new Date().getTime();
+                }
+            } else {
+                // If never checked, assume just checked now
+                lastCheckTime = new Date().getTime();
+            }
+
+            // Update countdown every second
+            if (countdownInterval) clearInterval(countdownInterval);
+            countdownInterval = setInterval(updateTokenCountdown, 1000);
+
+            // Initial update
+            updateTokenCountdown();
+        }
+
         // Auto-refresh occupancy and transactions after page loads
         $(document).ready(function() {
             autoRefresh('occupancy-555', '/api/occupancy/4005', 5000);
             autoRefresh('occupancy-boa', '/api/occupancy/4007', 5000);
             autoRefresh('waiting-count', '/api/waiting-count', 5000);
             autoRefresh('recent-transactions', '/api/recent-transactions', 3000);
+
+            // Start token countdown timer
+            initTokenCountdown();
 
             // Check monitoring status every 5 seconds
             setInterval(function() {
@@ -1360,6 +1482,28 @@ def dashboard():
                     })
                     .catch(error => console.error('Monitoring status check error:', error));
             }, 5000);
+
+            // Update token status every 30 seconds (in case of changes)
+            setInterval(function() {
+                fetch('/api/token-status')
+                    .then(response => response.json())
+                    .then(data => {
+                        // Update last check time if changed
+                        if (data.last_check && data.last_check !== 'Never') {
+                            const newCheckTime = new Date(data.last_check).getTime();
+                            if (newCheckTime !== lastCheckTime) {
+                                lastCheckTime = newCheckTime;
+                                document.getElementById('last-check-time').textContent = data.last_check;
+                            }
+                        }
+
+                        // Update last refresh time
+                        if (data.last_refresh && data.last_refresh !== 'Never') {
+                            document.getElementById('last-refresh-time').textContent = data.last_refresh;
+                        }
+                    })
+                    .catch(error => console.error('Token status update error:', error));
+            }, 30000);
         });
     </script>
     '''
@@ -2199,10 +2343,13 @@ def api_refresh_token():
 @login_required
 def api_token_status():
     """Get current token status"""
+    last_check = token_status.get('last_check')
+    last_refresh = token_status.get('last_refresh')
+
     return jsonify({
         'valid': token_status.get('valid', False),
-        'last_check': token_status.get('last_check').isoformat() if isinstance(token_status.get('last_check'), datetime) else None,
-        'last_refresh': token_status.get('last_refresh').isoformat() if isinstance(token_status.get('last_refresh'), datetime) else None,
+        'last_check': last_check.strftime('%Y-%m-%d %H:%M:%S') if isinstance(last_check, datetime) else 'Never',
+        'last_refresh': last_refresh.strftime('%Y-%m-%d %H:%M:%S') if isinstance(last_refresh, datetime) else 'Never',
         'error': token_status.get('error'),
         'auto_refresh_enabled': AUTO_TOKEN_REFRESH and HAS_SELENIUM,
         'selenium_available': HAS_SELENIUM
