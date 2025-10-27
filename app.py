@@ -356,24 +356,34 @@ def refresh_token_if_needed():
 def token_monitor_loop():
     """Background thread that monitors and refreshes token"""
     global token_status
-    
-    logger.info("🔄 Token monitor started")
-    
+
+    logger.info("🔄 Token monitor started - will check immediately then every 3 minutes")
+
+    # First check happens immediately
+    first_check = True
+
     while monitoring_active:
         try:
+            if first_check:
+                logger.info("Running first token check...")
+                first_check = False
+
             refresh_token_if_needed()
-            
+
             # Wait 3 minutes before next check
+            logger.info("Next token check in 3 minutes...")
             for _ in range(180):  # 180 seconds = 3 minutes
                 if not monitoring_active:
                     break
                 time.sleep(1)
-                
+
         except Exception as e:
             logger.error(f"Token monitor error: {e}")
+            import traceback
+            traceback.print_exc()
             token_status['error'] = str(e)
             time.sleep(10)
-    
+
     logger.info("Token monitor stopped")
 
 def start_token_monitor():
@@ -427,7 +437,10 @@ def member_monitoring_loop():
     """Background thread to monitor for member vehicles and auto-open gates"""
     global member_monitoring_active, last_activity
 
-    logger.info("🚗 Member auto-gate monitor started")
+    logger.info("🚗 Member auto-gate monitor started - checking every 3 seconds")
+    logger.info(f"   Monitoring {len(member_plates)} member plates")
+    logger.info(f"   Blocking {len(blacklist_plates)} blacklisted plates")
+
     last_opened = {}
 
     while member_monitoring_active:
@@ -438,6 +451,7 @@ def member_monitoring_loop():
                 transactions = get_active_visits(site_id)
 
                 if transactions:
+                    logger.debug(f"Found {len(transactions)} active visits at site {site_id}")
                     for transaction in transactions:
                         vehicle = transaction.get('vehicle', {})
                         license_plate_obj = vehicle.get('licensePlate', {}) if vehicle else {}
@@ -2357,31 +2371,55 @@ if __name__ == '__main__':
     except Exception as e:
         logger.warning(f"⚠️ Could not load token from file: {e}")
 
+    # Verify initial token FIRST (before starting monitors)
+    logger.info("🔍 Verifying initial token...")
+    token_is_valid = False
+    try:
+        token_is_valid = verify_token()
+        if token_is_valid:
+            logger.info("✅ Initial token is VALID")
+        else:
+            logger.warning("⚠️ Initial token is INVALID or EXPIRED")
+    except Exception as e:
+        logger.error(f"❌ Token verification failed: {e}")
+
+    # If token is invalid and auto-refresh is enabled, refresh NOW
+    if not token_is_valid and AUTO_TOKEN_REFRESH:
+        logger.info("🔄 Token is invalid - triggering immediate refresh...")
+        try:
+            if refresh_token_if_needed():
+                logger.info("✅ Token successfully refreshed on startup!")
+            else:
+                logger.error("❌ Failed to refresh token on startup")
+        except Exception as e:
+            logger.error(f"❌ Token refresh error: {e}")
+
     # Start token monitor if enabled
     if AUTO_TOKEN_REFRESH:
-        logger.info("🔄 Starting automatic token monitoring...")
+        logger.info("🔄 Starting automatic token monitoring (checks every 3 minutes)...")
         start_token_monitor()
+        # Give the thread a moment to start
+        time.sleep(0.5)
     else:
         logger.info("ℹ️ Auto token refresh is disabled")
 
     # Start member auto-gate monitoring (always enabled by default)
     logger.info("🚗 Starting member auto-gate monitoring...")
     start_member_monitoring()
+    # Give the thread a moment to start
+    time.sleep(0.5)
 
     # Start keep-alive thread
     logger.info("💓 Starting keep-alive monitor...")
     keep_alive_thread = threading.Thread(target=keep_alive_loop, daemon=True)
     keep_alive_thread.start()
 
-    # Verify initial token
-    logger.info("🔍 Verifying initial token...")
-    verify_token()
-
     logger.info("="*60)
     logger.info("🎉 ALL BACKGROUND SERVICES STARTED")
     logger.info(f"   - Token Monitor: {'✅ ACTIVE' if monitoring_active else '❌ INACTIVE'}")
     logger.info(f"   - Member Auto-Gate: {'✅ ACTIVE' if member_monitoring_active else '❌ INACTIVE'}")
     logger.info(f"   - Keep-Alive: ✅ ACTIVE")
+    logger.info(f"   - Initial Token Status: {'✅ VALID' if token_status.get('valid') else '❌ INVALID'}")
     logger.info("="*60)
 
     # Start Flask app
