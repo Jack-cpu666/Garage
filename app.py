@@ -1367,7 +1367,16 @@ def dashboard():
             const statusTextEl = document.getElementById('token-status-text');
             const spinnerEl = document.getElementById('token-spinner');
 
-            if (!countdownEl || !lastCheckTime) return;
+            // Check all required elements exist
+            if (!countdownEl || !progressEl || !statusTextEl || !spinnerEl) {
+                console.error('Token countdown elements not found');
+                return;
+            }
+
+            if (!lastCheckTime) {
+                console.error('lastCheckTime not set');
+                return;
+            }
 
             const now = new Date().getTime();
             const timeSinceCheck = Math.floor((now - lastCheckTime) / 1000); // seconds
@@ -1384,12 +1393,12 @@ def dashboard():
             progressEl.style.width = progressPercent + '%';
 
             // Change color as time runs out
-            if (timeUntilNext <= 30) {
-                progressEl.className = 'progress-bar progress-bar-striped progress-bar-animated bg-warning';
-                statusTextEl.textContent = 'Checking soon...';
-            } else if (timeUntilNext <= 10) {
+            if (timeUntilNext <= 10) {
                 progressEl.className = 'progress-bar progress-bar-striped progress-bar-animated bg-danger';
                 statusTextEl.textContent = 'Checking now...';
+            } else if (timeUntilNext <= 30) {
+                progressEl.className = 'progress-bar progress-bar-striped progress-bar-animated bg-warning';
+                statusTextEl.textContent = 'Checking soon...';
             } else {
                 progressEl.className = 'progress-bar progress-bar-striped progress-bar-animated bg-info';
                 statusTextEl.textContent = 'Waiting for next automatic check...';
@@ -1398,56 +1407,70 @@ def dashboard():
             // When countdown reaches 0, fetch new status
             if (timeUntilNext === 0) {
                 statusTextEl.textContent = '🔄 Checking token now...';
-                spinnerEl.style.display = 'block';
 
                 // Fetch updated token status
                 setTimeout(function() {
+                    console.log('Fetching updated token status...');
                     fetch('/api/token-status')
                         .then(response => response.json())
                         .then(data => {
+                            console.log('Token status updated:', data);
+
                             // Update last check time
                             if (data.last_check && data.last_check !== 'Never') {
                                 lastCheckTime = new Date(data.last_check).getTime();
                                 document.getElementById('last-check-time').textContent = data.last_check;
+                                console.log('Updated last check time to:', data.last_check);
                             }
 
                             // Update last refresh time
                             if (data.last_refresh && data.last_refresh !== 'Never') {
                                 document.getElementById('last-refresh-time').textContent = data.last_refresh;
                             }
-
-                            spinnerEl.style.display = 'none';
                         })
                         .catch(error => {
                             console.error('Token status fetch error:', error);
-                            spinnerEl.style.display = 'none';
                         });
                 }, 2000);
             }
         }
 
         function initTokenCountdown() {
+            // Check if countdown container exists
+            const countdownContainer = document.getElementById('token-countdown-container');
+            if (!countdownContainer) {
+                console.log('Token countdown container not found - auto-refresh may be disabled');
+                return;
+            }
+
             // Get initial last check time from the page
             const lastCheckText = document.getElementById('last-check-time').textContent;
+
+            console.log('Initializing token countdown with last check:', lastCheckText);
 
             if (lastCheckText && lastCheckText !== 'Never') {
                 try {
                     lastCheckTime = new Date(lastCheckText).getTime();
+                    console.log('Parsed last check time:', new Date(lastCheckTime));
                 } catch (e) {
                     console.error('Could not parse last check time:', e);
                     lastCheckTime = new Date().getTime();
                 }
             } else {
                 // If never checked, assume just checked now
+                console.log('No last check time, using current time');
                 lastCheckTime = new Date().getTime();
             }
 
             // Update countdown every second
-            if (countdownInterval) clearInterval(countdownInterval);
+            if (countdownInterval) {
+                clearInterval(countdownInterval);
+            }
             countdownInterval = setInterval(updateTokenCountdown, 1000);
 
             // Initial update
             updateTokenCountdown();
+            console.log('Token countdown timer started');
         }
 
         // Auto-refresh occupancy and transactions after page loads
