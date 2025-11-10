@@ -1,245 +1,288 @@
-from flask import Flask, render_template, render_template_string, request, jsonify, session, redirect, url_for, flash, get_flashed_messages
+from flask import Flask, render_template_string, jsonify, request
 import requests
 import json
+import threading
+import time
 import os
 import base64
 import re
-from datetime import datetime, timedelta
-import threading
-import time
-from functools import wraps
-import secrets
-import logging
+from datetime import datetime
+from io import BytesIO
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Selenium for token refresh
+try:
+    from selenium import webdriver
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.chrome.options import Options
+    HAS_SELENIUM = True
+except:
+    HAS_SELENIUM = False
+    print("Warning: Selenium not available. Auto token refresh disabled.")
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 
-# Configuration from environment variables
-AUTH_KEY = os.environ.get('AUTH_KEY', 'eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJpbXpVMnE4NXQxSDB5U2RpUHRKNmtmeWpkYXZlR2ZiaHdyZ01KbXNHZTQ4In0.eyJleHAiOjE3NjE0NTMwOTMsImlhdCI6MTc2MTQ0OTQ5MywiYXV0aF90aW1lIjoxNzYxNDQ5NDkyLCJqdGkiOiJlZmI2NzY2ZS04MTFlLTQzMmUtODc0Yy05NDc3YTRhYTIxMGQiLCJpc3MiOiJodHRwczovL2F1dGgubWV0cm9wb2xpcy5pby9yZWFsbXMvbWV0cm9wb2xpcyIsImF1ZCI6WyJtZXRyb3BvbGlzLXJlc291cmNlLWNsaWVudCIsIm1ldHJvcG9saXMtdXNlci1jbGllbnQiLCJtZXRyb3BvbGlzLXNlcnZlci1jbGllbnQiLCJhY2NvdW50Il0sInN1YiI6ImU2MzEzOWI2LWUyNzgtNGUwNS05ZDJmLTMzZWUxOGQwZGI4YyIsInR5cCI6IkJlYXJlciIsImF6cCI6Im1ldHJvcG9saXMtd2ViLWNsaWVudCIsIm5vbmNlIjoiMzA5MzA4MTYtM2JlYS00NTg1LTkyYWEtMzJlMDYwYzBhNjIzIiwic2Vzc2lvbl9zdGF0ZSI6ImQxMDk4YWJlLTM0ZTYtNGQ2Ny1hMTk2LTdlZWI3YTQ4YWRjZSIsImFjciI6IjEiLCJhbGxvd2VkLW9yaWdpbnMiOlsiaHR0cHM6Ly9tYW5hZ2VyLm1ldHJvcG9saXMuaW8iLCJodHRwczovL3BvcnRhbC5tZXRyb3BvbGlzLmlvIiwiaHR0cHM6Ly9yZXF1ZXN0Lm1ldHJvcG9saXMuaW8iLCJodHRwczovL2ludGFrZS5tZXRyb3BvbGlzLmlvIiwiaHR0cHM6Ly9kZXZvcHMudG9vbHMubWV0cm9wLmlvIiwiaHR0cHM6Ly9oYXJkd2FyZS5lZGdlLm1ldHJvcG9saXMuaW8iLCJodHRwczovL3NwZWNpYWxpc3QubWV0cm9wb2xpcy5pbyIsImh0dHA6Ly9sb2NhbGhvc3Q6MzAwMSIsImh0dHA6Ly9sb2NhbGhvc3Q6MzAwMCIsImh0dHBzOi8vZWRnZS5hdGcubWV0cm9wb2xpcy5pbyJdLCJyZWFsbV9hY2Nlc3MiOnsicm9sZXMiOlsiZGVmYXVsdC1yb2xlcy10ZXN0Iiwib2ZmbGluZV9hY2Nlc3MiLCJ1bWFfYXV0aG9yaXphdGlvbiJdfSwicmVzb3VyY2VfYWNjZXNzIjp7Im1ldHJvcG9saXMtc2VydmVyLWNsaWVudCI6eyJyb2xlcyI6WyJlbmZvcmNlbWVudCIsInBhcmtpbmcgcGFzcyIsInZhbGV0IiwiaW50YWtlIiwib3BlcmF0b3IiXX19LCJzY29wZSI6Im9wZW5pZCBwcm9maWxlIGVtYWlsIiwic2lkIjoiZDEwOThhYmUtMzRlNi00ZDY3LWExOTYtN2VlYjdhNDhhZGNlIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsIm5hbWUiOiI1NTUgU2VjdXJpdHkgIiwicHJlZmVycmVkX3VzZXJuYW1lIjoic2VjdXJpdHlANTU1Y2FwaXRvbG1hbGwuY29tIiwiZ2l2ZW5fbmFtZSI6IjU1NSIsImZhbWlseV9uYW1lIjoiU2VjdXJpdHkgIiwiZW1haWwiOiJzZWN1cml0eUA1NTVjYXBpdG9sbWFsbC5jb20ifQ.Xcaxd5K_0sazYYyaqDZiKWapPLqkKcrJcr6ox_Uei-PpRNLBRFTcjCuj3EAHTVL1Va0w0WFvY0uVP51PTRnrx8IvZsNpbu38B9BF6a_gjk0oMHSIb8A3Eu-rQsNdniiirDk7Yy_f-7mp6FCa6xIr83rHeyNnwMdTP_EkOzD-fUSgLtUVWmM9JoRDlv9U2A6hM1gVehV3EY5T5PQH4IcHATkeJmCWCA2N5KTjCmTHNVlWyrX84YX6TGmuDIdzJCdb2WHfOIM5Pf6128s-BHDhurB-nF27ktZ7dlbQOUkaCiIUlHzMqdAVqHRJK-eyX0Fd6KBUZa64cuJoanZNRTGldQ')
-BASE_URL = os.environ.get('BASE_URL', 'https://specialist.api.metropolis.io')
-SITE_ID = os.environ.get('SITE_ID', '4005')
-EMAIL = os.environ.get('EMAIL', 'security@555capitolmall.com')
-PASSWORD = os.environ.get('PASSWORD', '555_Security')
-ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin555')
-AUTO_TOKEN_REFRESH = os.environ.get('AUTO_TOKEN_REFRESH', 'true').lower() == 'true'
+# YOUR AUTH KEY (JWT Bearer Token)
+AUTH_KEY = "eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJpbXpVMnE4NXQxSDB5U2RpUHRKNmtmeWpkYXZlR2ZiaHdyZ01KbXNHZTQ4In0.eyJleHAiOjE3NjE1MTc1MTgsImlhdCI6MTc2MTUxMzkxOCwiYXV0aF90aW1lIjoxNzYxNTEzOTE3LCJqdGkiOiIzODVmNjE4MS00ZmI0LTRmOWMtYmQwZC1jOWUyNmVhNzQxOGEiLCJpc3MiOiJodHRwczovL2F1dGgubWV0cm9wb2xpcy5pby9yZWFsbXMvbWV0cm9wb2xpcyIsImF1ZCI6WyJtZXRyb3BvbGlzLXJlc291cmNlLWNsaWVudCIsIm1ldHJvcG9saXMtdXNlci1jbGllbnQiLCJtZXRyb3BvbGlzLXNlcnZlci1jbGllbnQiLCJhY2NvdW50Il0sInN1YiI6ImU2MzEzOWI2LWUyNzgtNGUwNS05ZDJmLTMzZWUxOGQwZGI4YyIsInR5cCI6IkJlYXJlciIsImF6cCI6Im1ldHJvcG9saXMtd2ViLWNsaWVudCIsIm5vbmNlIjoiMjhmM2M1MWUtZTg5ZS00MDdjLTg4ZTMtOTcwZWNmNzM5MzEzIiwic2Vzc2lvbl9zdGF0ZSI6IjM2MTg5MTBlLTQxMjQtNDNlYS1hYTRhLWI2ZmFkNzM0ZTMwNyIsImFjciI6IjEiLCJhbGxvd2VkLW9yaWdpbnMiOlsiaHR0cHM6Ly9tYW5hZ2VyLm1ldHJvcG9saXMuaW8iLCJodHRwczovL3BvcnRhbC5tZXRyb3BvbGlzLmlvIiwiaHR0cHM6Ly9yZXF1ZXN0Lm1ldHJvcG9saXMuaW8iLCJodHRwczovL2ludGFrZS5tZXRyb3BvbGlzLmlvIiwiaHR0cHM6Ly9kZXZvcHMudG9vbHMubWV0cm9wLmlvIiwiaHR0cHM6Ly9oYXJkd2FyZS5lZGdlLm1ldHJvcG9saXMuaW8iLCJodHRwczovL3NwZWNpYWxpc3QubWV0cm9wb2xpcy5pbyIsImh0dHA6Ly9sb2NhbGhvc3Q6MzAwMSIsImh0dHA6Ly9sb2NhbGhvc3Q6MzAwMCIsImh0dHBzOi8vZWRnZS5hdGcubWV0cm9wb2xpcy5pbyJdLCJyZWFsbV9hY2Nlc3MiOnsicm9sZXMiOlsiZGVmYXVsdC1yb2xlcy10ZXN0Iiwib2ZmbGluZV9hY2Nlc3MiLCJ1bWFfYXV0aG9yaXphdGlvbiJdfSwicmVzb3VyY2VfYWNjZXNzIjp7Im1ldHJvcG9saXMtc2VydmVyLWNsaWVudCI6eyJyb2xlcyI6WyJlbmZvcmNlbWVudCIsInBhcmtpbmcgcGFzcyIsInZhbGV0IiwiaW50YWtlIiwib3BlcmF0b3IiXX19LCJzY29wZSI6Im9wZW5pZCBwcm9maWxlIGVtYWlsIiwic2lkIjoiMzYxODkxMGUtNDEyNC00M2VhLWFhNGEtYjZmYWQ3MzRlMzA3IiwiZW1haWxfdmVyaWZpZWQiOnRydWUsIm5hbWUiOiI1NTUgU2VjdXJpdHkgIiwicHJlZmVycmVkX3VzZXJuYW1lIjoic2VjdXJpdHlANTU1Y2FwaXRvbG1hbGwuY29tIiwiZ2l2ZW5fbmFtZSI6IjU1NSIsImZhbWlseV9uYW1lIjoiU2VjdXJpdHkgIiwiZW1haWwiOiJzZWN1cml0eUA1NTVjYXBpdG9sbWFsbC5jb20ifQ.tb4ViCB42dJrFqs3lzowgG7jMdTAl_60jnG2AblsDou46Tn10IbJ-c2The3Ja2u4dcbQVqEjktGEXAExHZ44ehZD_AIo4dGx_hIEdbEz8nPoKVi-dYjO9U_HY7oZJZ0H2kXGwPUeiMhwaw7xlie1ifvwXiNZfkrCJ-gRxZ_06c6BKPUgyb-qsJ0UTeCcRu3OretpIXuD9iAabtrMTMIkJdVpAOzF0EFz9A5rempJqPbuYG-aTSjxegsoZSVkDzOq6hdMxCqgNOePyB_FK1GRXNyTtTbJVsiZXux1UeceUkrZWOWSedDepUK3T65eG23U1cKONgtfy5sLbv7J2GAawA"
+BASE_URL = "https://specialist.api.metropolis.io"
+SITE_ID = "4005"
 
-# Storage files (matches WORKING_GATE_OPENER.py)
+# Login credentials for auto token refresh
+EMAIL = "security@555capitolmall.com"
+PASSWORD = "555_Security"
+LOGIN_URL = "https://specialist.metropolis.io/site/4005"
+
+# Membership storage
 MEMBERS_FILE = "memberships.json"
 BLACKLIST_FILE = "blacklist.json"
-
-# In-memory storage
 member_plates = []
 blacklist_plates = []
 monitoring_active = False
-member_monitoring_active = False
-token_status = {'valid': False, 'last_check': None, 'last_refresh': None, 'error': None}
+monitoring_thread = None
+token_monitor_active = False
 token_monitor_thread = None
-member_monitor_thread = None
-last_activity = time.time()
+
+# Status tracking
+current_status = {"monitoring": "OFF", "token_monitor": "OFF", "last_action": "System started"}
 
 def load_members():
-    """Load member plates from JSON file"""
     global member_plates
     if os.path.exists(MEMBERS_FILE):
         try:
             with open(MEMBERS_FILE, 'r') as f:
                 member_plates = json.load(f)
-            logger.info(f"Loaded {len(member_plates)} member plates")
+            print(f"Loaded {len(member_plates)} member plates")
         except Exception as e:
-            logger.error(f"Error loading members: {e}")
+            print(f"Error loading members: {e}")
             member_plates = []
     else:
         member_plates = []
 
 def save_members():
-    """Save member plates to JSON file"""
     try:
         with open(MEMBERS_FILE, 'w') as f:
             json.dump(member_plates, f, indent=2)
-        logger.info(f"Saved {len(member_plates)} member plates")
+        print(f"Saved {len(member_plates)} member plates")
     except Exception as e:
-        logger.error(f"Error saving members: {e}")
+        print(f"Error saving members: {e}")
 
 def load_blacklist():
-    """Load blacklisted plates from JSON file"""
     global blacklist_plates
     if os.path.exists(BLACKLIST_FILE):
         try:
             with open(BLACKLIST_FILE, 'r') as f:
                 blacklist_plates = json.load(f)
-            logger.info(f"Loaded {len(blacklist_plates)} blacklisted plates")
+            print(f"Loaded {len(blacklist_plates)} blacklisted plates")
         except Exception as e:
-            logger.error(f"Error loading blacklist: {e}")
+            print(f"Error loading blacklist: {e}")
             blacklist_plates = []
     else:
         blacklist_plates = []
 
 def save_blacklist():
-    """Save blacklisted plates to JSON file"""
     try:
         with open(BLACKLIST_FILE, 'w') as f:
             json.dump(blacklist_plates, f, indent=2)
-        logger.info(f"Saved {len(blacklist_plates)} blacklisted plates")
+        print(f"Saved {len(blacklist_plates)} blacklisted plates")
     except Exception as e:
-        logger.error(f"Error saving blacklist: {e}")
+        print(f"Error saving blacklist: {e}")
 
-# Try importing Selenium for auto token refresh
-HAS_SELENIUM = False
-try:
-    from selenium import webdriver
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.common.keys import Keys
-    from selenium.webdriver.edge.options import Options as EdgeOptions
-    from selenium.webdriver.chrome.options import Options as ChromeOptions
-    from selenium.webdriver.firefox.options import Options as FirefoxOptions
-    HAS_SELENIUM = True
-    logger.info("✅ Selenium available - Auto token refresh enabled")
-except ImportError:
-    logger.warning("⚠️ Selenium not available - Auto token refresh disabled")
-    logger.warning("Install with: pip install selenium")
+def decode_jwt_payload(token):
+    try:
+        parts = token.split('.')
+        if len(parts) != 3:
+            return None
+        payload = parts[1]
+        padding = 4 - len(payload) % 4
+        if padding != 4:
+            payload += '=' * padding
+        decoded = base64.urlsafe_b64decode(payload)
+        return json.loads(decoded)
+    except Exception as e:
+        print(f"JWT decode error: {e}")
+        return None
 
-def verify_token():
-    """Verify if current token is valid by making a test API call"""
-    global AUTH_KEY, token_status
+def is_token_expired(token):
+    payload = decode_jwt_payload(token)
+    if not payload:
+        return True
+    exp = payload.get('exp')
+    if not exp:
+        return True
+    current_time = time.time()
+    return current_time >= (exp - 300)
+
+def get_token_expiration_time(token):
+    payload = decode_jwt_payload(token)
+    if not payload:
+        return None
+    exp = payload.get('exp')
+    if not exp:
+        return None
+    return datetime.fromtimestamp(exp)
+
+def open_gate(lane_id, gate_name, site_id=None, visit_id=None):
+    global AUTH_KEY
+    site = site_id if site_id else SITE_ID
+    endpoint = f"/api/specialist/site/{site}/lane/{lane_id}/open-gate"
+    if visit_id:
+        endpoint += f"?visitId={visit_id}"
+    url = BASE_URL + endpoint
+
+    headers = {
+        "Authorization": f"Bearer {AUTH_KEY}",
+        "Accept": "*/*",
+        "Content-Type": "application/json",
+        "Origin": "https://specialist.metropolis.io",
+        "Referer": "https://specialist.metropolis.io/",
+        "User-Agent": "Mozilla/5.0",
+    }
 
     try:
-        # Use the correct endpoint format (singular "site" not "sites")
-        url = f"{BASE_URL}/api/site/{SITE_ID}/occupancy"
-        headers = {
-            "Authorization": f"Bearer {AUTH_KEY}",
-            "Accept": "*/*"
-        }
+        print(f"\nOpening gate: POST {endpoint}")
+        response = requests.post(url, headers=headers, timeout=10)
+        print(f"Status: {response.status_code}")
 
-        logger.info(f"Verifying token... (length: {len(AUTH_KEY)}, dots: {AUTH_KEY.count('.')})")
-        response = requests.get(url, headers=headers, timeout=10)
-
-        logger.info(f"Verification response: {response.status_code}")
-
-        if response.status_code == 200:
-            token_status['valid'] = True
-            token_status['last_check'] = datetime.now()
-            token_status['error'] = None
-            logger.info("✅ Token is valid")
+        if response.status_code in [200, 201, 204]:
+            print(f"Gate {gate_name} opened!")
+            current_status["last_action"] = f"Opened {gate_name}"
             return True
-        elif response.status_code == 401:
-            token_status['valid'] = False
-            token_status['last_check'] = datetime.now()  # Update last check even when invalid
-            token_status['error'] = 'Token expired or invalid'
-            logger.warning(f"❌ Token is invalid/expired - Response: {response.text[:200]}")
-            return False
         else:
-            token_status['last_check'] = datetime.now()  # Update last check even on unexpected status
-            error_msg = f'Unexpected status: {response.status_code}'
-            token_status['error'] = error_msg
-            logger.warning(f"⚠️ {error_msg} - Response: {response.text[:200]}")
+            print(f"Error opening gate: {response.text}")
             return False
-
     except Exception as e:
-        token_status['valid'] = False
-        token_status['last_check'] = datetime.now()  # Update last check even on error
-        token_status['error'] = str(e)
-        logger.error(f"Error verifying token: {e}")
+        print(f"Error: {e}")
         return False
 
-def get_new_token_selenium():
-    """Get a new token using headless Selenium"""
-    if not HAS_SELENIUM:
-        logger.error("Selenium not available")
-        return None
-    
-    driver = None
+def get_active_visits(site_id):
+    global AUTH_KEY
+    url = f"{BASE_URL}/api/specialist/site/{site_id}/visits/closed?count=50&minPaymentDueAgeSeconds=0&zoneIds={site_id}"
+    headers = {
+        "Authorization": f"Bearer {AUTH_KEY}",
+        "Accept": "*/*",
+    }
     try:
-        logger.info("🤖 Starting headless token refresh...")
-        
-        # Try different browsers in order of preference
-        browsers = []
-        
-        # Try Edge first
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('success') and data.get('data'):
+                transactions = data['data'].get('transactions', [])
+                return [t for t in transactions if 'VEND_GATE' in t.get('availableActionsForSpecialist', [])]
+    except Exception as e:
+        print(f"Error getting visits: {e}")
+    return None
+
+def monitor_and_auto_open():
+    global monitoring_active, AUTH_KEY
+    last_opened = {}
+
+    while monitoring_active:
         try:
-            edge_options = EdgeOptions()
-            edge_options.add_argument('--headless')
-            edge_options.add_argument('--no-sandbox')
-            edge_options.add_argument('--disable-dev-shm-usage')
-            edge_options.add_argument('--disable-gpu')
-            edge_options.add_argument('--window-size=1920,1080')
-            edge_options.add_experimental_option('excludeSwitches', ['enable-logging'])
-            browsers.append(('edge', lambda: webdriver.Edge(options=edge_options)))
-        except:
-            pass
-        
-        # Try Chrome
-        try:
-            chrome_options = ChromeOptions()
-            chrome_options.add_argument('--headless')
-            chrome_options.add_argument('--no-sandbox')
-            chrome_options.add_argument('--disable-dev-shm-usage')
-            chrome_options.add_argument('--disable-gpu')
-            chrome_options.add_argument('--window-size=1920,1080')
-            chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
-            browsers.append(('chrome', lambda: webdriver.Chrome(options=chrome_options)))
-        except:
-            pass
-        
-        # Try Firefox
-        try:
-            firefox_options = FirefoxOptions()
-            firefox_options.add_argument('--headless')
-            firefox_options.add_argument('--width=1920')
-            firefox_options.add_argument('--height=1080')
-            browsers.append(('firefox', lambda: webdriver.Firefox(options=firefox_options)))
-        except:
-            pass
-        
-        if not browsers:
-            logger.error("No browser drivers available")
-            return None
-        
-        # Try each browser until one works
-        for browser_name, browser_func in browsers:
-            try:
-                logger.info(f"Trying {browser_name}...")
-                driver = browser_func()
-                break
-            except Exception as e:
-                logger.warning(f"{browser_name} failed: {e}")
-                continue
-        
-        if not driver:
-            logger.error("Could not initialize any browser")
-            return None
-        
-        # Navigate to login page
-        login_url = f"https://specialist.metropolis.io/site/{SITE_ID}"
-        logger.info(f"Navigating to {login_url}")
-        driver.get(login_url)
+            for site_id in ["4005", "4007"]:
+                transactions = get_active_visits(site_id)
+
+                if transactions:
+                    for transaction in transactions:
+                        vehicle = transaction.get('vehicle', {})
+                        license_plate_obj = vehicle.get('licensePlate', {}) if vehicle else {}
+                        plate = license_plate_obj.get('text', '').upper() if license_plate_obj else ''
+                        visit_id = transaction.get('id')
+                        
+                        images = transaction.get('images', {})
+                        exit_event = images.get('exitEvent') if images else None
+                        site_equipment = exit_event.get('siteEquipment') if exit_event else None
+                        lane_id = site_equipment.get('laneId') if site_equipment else None
+
+                        # CHECK BLACKLIST FIRST
+                        if plate and plate in [p.upper() for p in blacklist_plates]:
+                            if visit_id and visit_id not in last_opened:
+                                user = transaction.get('user', {})
+                                user_name = f"{user.get('firstName', '')} {user.get('lastName', '')}".strip()
+                                msg = f"BLOCKED: {plate} ({user_name}) - ON BLACKLIST!"
+                                print(f"[BLOCKED] {msg}")
+                                current_status["last_action"] = msg
+                                last_opened[visit_id] = time.time()
+                        
+                        # Check if plate is in member list
+                        elif plate and plate in [p.upper() for p in member_plates]:
+                            if visit_id and visit_id not in last_opened:
+                                user = transaction.get('user', {})
+                                user_name = f"{user.get('firstName', '')} {user.get('lastName', '')}".strip()
+                                msg = f"AUTO-OPEN: {plate} ({user_name}) at site {site_id}"
+                                print(f"[AUTO-OPEN] {msg}")
+                                current_status["last_action"] = msg
+
+                                if lane_id:
+                                    open_gate(str(lane_id), f"Auto Lane {lane_id}", site_id=site_id, visit_id=visit_id)
+                                else:
+                                    default_lane = "5568" if site_id == "4005" else "5565"
+                                    open_gate(default_lane, "Default Gate", site_id=site_id, visit_id=visit_id)
+
+                                last_opened[visit_id] = time.time()
+
+                current_time = time.time()
+                last_opened = {k: v for k, v in last_opened.items() if current_time - v < 600}
+
+            time.sleep(3)
+
+        except Exception as e:
+            print(f"Monitor error: {e}")
+            import traceback
+            traceback.print_exc()
+            time.sleep(5)
+
+def refresh_token_headless():
+    global AUTH_KEY
+
+    if not HAS_SELENIUM:
+        print("ERROR: Selenium not available. Cannot refresh token.")
+        return None
+
+    print("\n" + "="*60)
+    print("🔄 REFRESHING TOKEN (Headless Mode)")
+    print("="*60)
+
+    try:
+        options = Options()
+        options.add_argument('--headless')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--log-level=3')
+
+        driver = webdriver.Chrome(options=options)
+        driver.get(LOGIN_URL)
+
+        print("📱 Navigating to login page...")
         time.sleep(3)
-        
-        # Login
-        logger.info("Logging in...")
-        email_field = driver.find_element(By.ID, "username")
-        email_field.send_keys(EMAIL)
-        time.sleep(1)
-        
-        password_field = driver.find_element(By.ID, "password")
-        password_field.send_keys(PASSWORD)
-        password_field.send_keys(Keys.RETURN)
-        time.sleep(5)
-        
-        # Inject JavaScript to capture token (using exact logic from get token.py)
-        logger.info("Injecting token interceptor...")
+
+        try:
+            print("📧 Logging in...")
+            email_field = driver.find_element(By.ID, "username")
+            email_field.send_keys(EMAIL)
+            time.sleep(1)
+
+            password_field = driver.find_element(By.ID, "password")
+            password_field.send_keys(PASSWORD)
+            password_field.send_keys(Keys.RETURN)
+
+            print("🔐 Waiting for authentication...")
+            time.sleep(5)
+
+        except Exception as e:
+            print(f"⚠️ Login error: {e}")
+            driver.quit()
+            return None
+
+        print("💉 Injecting token interceptor...")
+
         intercept_script = """
         window.capturedToken = null;
 
-        // Override fetch
         const originalFetch = window.fetch;
         window.fetch = function(...args) {
             const [url, config] = args;
 
-            // Capture Authorization header
             if (config && config.headers) {
                 const auth = config.headers['Authorization'] || config.headers['authorization'];
                 if (auth && auth.startsWith('Bearer ')) {
@@ -251,7 +294,6 @@ def get_new_token_selenium():
             return originalFetch.apply(this, args);
         };
 
-        // Override XMLHttpRequest
         const originalOpen = XMLHttpRequest.prototype.open;
         const originalSetHeader = XMLHttpRequest.prototype.setRequestHeader;
 
@@ -271,2344 +313,841 @@ def get_new_token_selenium():
             return originalSetHeader.apply(this, arguments);
         };
 
-        console.log('🎣 Fetch interceptor installed!');
+        console.log('🎣 Token interceptor installed!');
         """
 
         driver.execute_script(intercept_script)
+        print("✅ Interceptor installed!")
 
-        # Wait for token capture (using exact logic from get token.py)
-        logger.info("Waiting for API call to capture token...")
+        print("⏳ Waiting for API call to capture token...")
         token = None
-        for i in range(30):  # Check for 30 seconds
+
+        for i in range(30):
             time.sleep(1)
             token = driver.execute_script("return window.capturedToken;")
 
             if token:
-                logger.info(f"✅ TOKEN CAPTURED after {i+1} seconds!")
-                logger.info(f"Token length: {len(token)} chars")
-                logger.info(f"Token preview: {token[:50]}...")
+                print(f"\n✅ TOKEN CAPTURED! (after {i+1} seconds)")
                 break
 
-            # Trigger a page interaction to force API calls
             if i == 5:
-                logger.info("Refreshing page to trigger API calls...")
+                print("   Refreshing page to trigger API calls...")
                 driver.refresh()
                 time.sleep(2)
-                driver.execute_script(intercept_script)  # Re-inject after refresh
-        
+                driver.execute_script(intercept_script)
+
+            print(f"   Waiting... ({i+1}s)", end='\r')
+
+        driver.quit()
+
         if token:
-            logger.info("🎉 Successfully obtained new token")
+            print(f"\n✅ SUCCESS! Token refreshed!")
+            print(f"Token preview: {token[:50]}...")
+            AUTH_KEY = token
+
+            with open('auth_token.txt', 'w') as f:
+                f.write(token)
+
+            print("="*60)
+            current_status["last_action"] = "Token refreshed successfully"
             return token
         else:
-            logger.error("❌ No token captured after 30 seconds")
-            logger.info("💡 The page might not have made any API calls.")
+            print("\n❌ No token captured after 30 seconds")
+            print("="*60)
             return None
-            
-    except Exception as e:
-        logger.error(f"Error getting new token: {e}")
-        return None
-    finally:
-        if driver:
-            driver.quit()
 
-def refresh_token_if_needed():
-    """Check token and refresh if needed"""
-    global AUTH_KEY, token_status
-    
-    logger.info("🔍 Checking token status...")
-    
-    if verify_token():
-        logger.info("✅ Token is still valid")
-        return True
-    
-    logger.warning("⚠️ Token expired, attempting refresh...")
-    
-    if not HAS_SELENIUM:
-        logger.error("Cannot refresh - Selenium not available")
-        token_status['error'] = "Auto-refresh unavailable (Selenium not installed)"
-        return False
-    
-    new_token = get_new_token_selenium()
-    
-    if new_token:
-        AUTH_KEY = new_token
-        token_status['last_refresh'] = datetime.now()
-        
-        # Verify the new token works
-        if verify_token():
-            logger.info("✅ Token refreshed successfully")
-            
-            # Save to environment for persistence
-            os.environ['AUTH_KEY'] = new_token
-            
-            # Save to file as backup
-            try:
-                with open('auth_token.txt', 'w') as f:
-                    f.write(new_token)
-                logger.info("💾 Token saved to auth_token.txt")
-            except:
-                pass
-            
-            return True
-        else:
-            logger.error("New token verification failed")
-            return False
-    else:
-        logger.error("Failed to obtain new token")
-        return False
+    except Exception as e:
+        print(f"❌ Token refresh error: {e}")
+        import traceback
+        traceback.print_exc()
+        try:
+            driver.quit()
+        except:
+            pass
+        return None
 
 def token_monitor_loop():
-    """Background thread that monitors and refreshes token"""
-    global token_status
+    global token_monitor_active, AUTH_KEY
 
-    logger.info("🔄 Token monitor started - will check immediately then every 3 minutes")
+    print("\n🔐 Token monitor started - checking every 3 minutes")
 
-    # First check happens immediately
-    first_check = True
-
-    while monitoring_active:
+    while token_monitor_active:
         try:
-            if first_check:
-                logger.info("Running first token check...")
-                first_check = False
+            exp_time = get_token_expiration_time(AUTH_KEY)
 
-            refresh_token_if_needed()
+            if exp_time:
+                time_remaining = exp_time - datetime.now()
+                hours = int(time_remaining.total_seconds() // 3600)
+                minutes = int((time_remaining.total_seconds() % 3600) // 60)
 
-            # Wait 3 minutes before next check
-            logger.info("Next token check in 3 minutes...")
-            for _ in range(180):  # 180 seconds = 3 minutes
-                if not monitoring_active:
-                    break
-                time.sleep(1)
+                status_msg = f"Token expires in {hours}h {minutes}m"
+                print(f"[TOKEN CHECK] {status_msg}")
+                current_status["token_monitor"] = status_msg
+
+                if is_token_expired(AUTH_KEY):
+                    print("\n⚠️ TOKEN EXPIRED OR EXPIRING SOON - Auto-refreshing...")
+                    current_status["last_action"] = "Refreshing token..."
+
+                    new_token = refresh_token_headless()
+
+                    if new_token:
+                        AUTH_KEY = new_token
+                        print("✅ Token successfully refreshed!")
+                        current_status["last_action"] = "Token refreshed successfully"
+                    else:
+                        print("❌ Token refresh failed!")
+                        current_status["last_action"] = "Token refresh failed"
+            else:
+                print("[TOKEN CHECK] Could not decode token")
+                current_status["token_monitor"] = "Token decode error"
+
+            time.sleep(180)
 
         except Exception as e:
-            logger.error(f"Token monitor error: {e}")
+            print(f"Token monitor error: {e}")
             import traceback
             traceback.print_exc()
-            token_status['error'] = str(e)
-            time.sleep(10)
+            time.sleep(60)
 
-    logger.info("Token monitor stopped")
+def get_hanging_exits(site_id):
+    global AUTH_KEY
+    url = f"{BASE_URL}/api/specialist/site/{site_id}/event/hanging-exit/count"
+    headers = {"Authorization": f"Bearer {AUTH_KEY}", "Accept": "*/*"}
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+    except Exception as e:
+        print(f"Error fetching hanging exits: {e}")
+    return None
 
-def start_token_monitor():
-    """Start the token monitoring thread"""
-    global monitoring_active, token_monitor_thread
+def get_closed_visits(site_id, count=25):
+    global AUTH_KEY
+    url = f"{BASE_URL}/api/specialist/site/{site_id}/visits/closed?count={count}&minPaymentDueAgeSeconds=180&zoneIds={site_id}"
+    headers = {"Authorization": f"Bearer {AUTH_KEY}", "Accept": "*/*"}
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+    except Exception as e:
+        print(f"Error fetching closed visits: {e}")
+    return None
 
-    if not AUTO_TOKEN_REFRESH:
-        logger.info("Auto token refresh disabled by configuration")
-        return
+def get_occupancy(site_id):
+    global AUTH_KEY
+    url = f"{BASE_URL}/api/site/{site_id}/occupancy"
+    headers = {"Authorization": f"Bearer {AUTH_KEY}", "Accept": "*/*"}
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+    except Exception as e:
+        print(f"Error fetching occupancy: {e}")
+    return None
 
-    if not HAS_SELENIUM:
-        logger.warning("Auto token refresh unavailable - Selenium not installed")
-        return
-
-    if monitoring_active:
-        logger.info("Token monitor already running")
-        return
-
-    monitoring_active = True
-    token_monitor_thread = threading.Thread(target=token_monitor_loop, daemon=True)
-    token_monitor_thread.start()
-    logger.info("✅ Token monitor started")
-
-def stop_token_monitor():
-    """Stop the token monitoring thread"""
-    global monitoring_active
-
-    monitoring_active = False
-    logger.info("Token monitor stop requested")
-
-def get_active_visits(site_id):
-    """Get currently active visits (cars in garage/at gates)"""
-    url = f"{BASE_URL}/api/specialist/site/{site_id}/visits/closed?count=50&minPaymentDueAgeSeconds=0&zoneIds={site_id}"
-    headers = {
-        "Authorization": f"Bearer {AUTH_KEY}",
-        "Accept": "*/*",
-    }
+def get_all_members(site_id):
+    global AUTH_KEY
+    url = f"{BASE_URL}/api/specialist/site/{site_id}/visits/closed?count=100&minPaymentDueAgeSeconds=0&zoneIds={site_id}"
+    headers = {"Authorization": f"Bearer {AUTH_KEY}", "Accept": "*/*"}
     try:
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             data = response.json()
             if data.get('success') and data.get('data'):
                 transactions = data['data'].get('transactions', [])
-                # Filter for transactions that can be vended
-                return [t for t in transactions if 'VEND_GATE' in t.get('availableActionsForSpecialist', [])]
+                members = []
+                seen_users = set()
+                for t in transactions:
+                    user = t.get('user', {})
+                    if user.get('isMember') and user.get('phoneNumber') not in seen_users:
+                        member_info = {
+                            'user': user,
+                            'vehicle': t.get('vehicle', {}),
+                            'hasSubscription': user.get('hasSubscription', False),
+                            'lastVisit': t.get('end'),
+                            'coveredBySubscription': t.get('coveredBySubscription', False)
+                        }
+                        members.append(member_info)
+                        seen_users.add(user.get('phoneNumber'))
+                return members
     except Exception as e:
-        logger.error(f"Error getting visits: {e}")
+        print(f"Error getting members: {e}")
     return []
 
-def member_monitoring_loop():
-    """Background thread to monitor for member vehicles and auto-open gates"""
-    global member_monitoring_active, last_activity
-
-    logger.info("🚗 Member auto-gate monitor started - checking every 3 seconds")
-    logger.info(f"   Monitoring {len(member_plates)} member plates")
-    logger.info(f"   Blocking {len(blacklist_plates)} blacklisted plates")
-
-    last_opened = {}
-
-    while member_monitoring_active:
-        try:
-            last_activity = time.time()  # Update activity timestamp
-
-            for site_id in ["4005", "4007"]:
-                transactions = get_active_visits(site_id)
-
-                if transactions:
-                    logger.debug(f"Found {len(transactions)} active visits at site {site_id}")
-                    for transaction in transactions:
-                        vehicle = transaction.get('vehicle', {})
-                        license_plate_obj = vehicle.get('licensePlate', {}) if vehicle else {}
-                        plate = license_plate_obj.get('text', '').upper() if license_plate_obj else ''
-
-                        visit_id = transaction.get('id')
-
-                        images = transaction.get('images', {})
-                        exit_event = images.get('exitEvent') if images else None
-                        site_equipment = exit_event.get('siteEquipment') if exit_event else None
-                        lane_id = site_equipment.get('laneId') if site_equipment else None
-
-                        # CHECK BLACKLIST FIRST
-                        if plate and plate in [p.upper() for p in blacklist_plates]:
-                            if visit_id and visit_id not in last_opened:
-                                user = transaction.get('user', {})
-                                user_name = f"{user.get('firstName', '')} {user.get('lastName', '')}".strip()
-
-                                logger.warning(f"[BLOCKED] Blacklisted plate: {plate} ({user_name}) at site {site_id}")
-                                last_opened[visit_id] = time.time()
-
-                        # Check if plate is in member list
-                        elif plate and plate in [p.upper() for p in member_plates]:
-                            if visit_id and visit_id not in last_opened:
-                                user = transaction.get('user', {})
-                                user_name = f"{user.get('firstName', '')} {user.get('lastName', '')}".strip()
-
-                                logger.info(f"[AUTO-OPEN] Member detected: {plate} ({user_name}) at site {site_id}")
-
-                                # Open the gate
-                                if lane_id:
-                                    open_gate_internal(str(lane_id), f"Auto Lane {lane_id}", site_id=site_id, visit_id=visit_id)
-                                else:
-                                    default_lane = "5568" if site_id == "4005" else "5565"
-                                    open_gate_internal(default_lane, "Default Gate", site_id=site_id, visit_id=visit_id)
-
-                                last_opened[visit_id] = time.time()
-
-                # Clean up old entries (older than 10 minutes)
-                current_time = time.time()
-                last_opened = {k: v for k, v in last_opened.items() if current_time - v < 600}
-
-            time.sleep(3)  # Check every 3 seconds
-
-        except Exception as e:
-            logger.error(f"Member monitor error: {e}")
-            import traceback
-            traceback.print_exc()
-            time.sleep(5)
-
-    logger.info("Member monitoring stopped")
-
-def open_gate_internal(lane_id, gate_name, site_id=None, visit_id=None):
-    """Internal function to open gate (used by monitoring)"""
-    site = site_id if site_id else SITE_ID
-    endpoint = f"/api/specialist/site/{site}/lane/{lane_id}/open-gate"
-
-    if visit_id:
-        endpoint += f"?visitId={visit_id}"
-
-    url = BASE_URL + endpoint
-    headers = {
-        "Authorization": f"Bearer {AUTH_KEY}",
-        "Accept": "*/*",
-        "Content-Type": "application/json",
-        "Origin": "https://specialist.metropolis.io",
-        "Referer": "https://specialist.metropolis.io/",
-        "User-Agent": "Mozilla/5.0"
-    }
-
-    try:
-        response = requests.post(url, headers=headers, timeout=10)
-        if response.status_code in [200, 201, 204]:
-            logger.info(f"✅ Gate {gate_name} opened successfully")
-            return True
-        else:
-            logger.error(f"❌ Failed to open {gate_name}: {response.status_code}")
-            return False
-    except Exception as e:
-        logger.error(f"Error opening gate: {e}")
-        return False
-
-def start_member_monitoring():
-    """Start the member monitoring thread"""
-    global member_monitoring_active, member_monitor_thread
-
-    if member_monitoring_active:
-        logger.info("Member monitor already running")
-        return
-
-    member_monitoring_active = True
-    member_monitor_thread = threading.Thread(target=member_monitoring_loop, daemon=True)
-    member_monitor_thread.start()
-    logger.info("✅ Member auto-gate monitor started")
-
-def stop_member_monitoring():
-    """Stop the member monitoring thread"""
-    global member_monitoring_active
-
-    member_monitoring_active = False
-    logger.info("Member monitoring stop requested")
-
-def keep_alive_loop():
-    """Keep the app alive by updating activity timestamp"""
-    global last_activity
-    while True:
-        time.sleep(60)  # Update every minute
-        last_activity = time.time()
-        logger.debug(f"Keep-alive ping - Active monitors: Token={monitoring_active}, Members={member_monitoring_active}")
-
-def render_content(content, **kwargs):
-    """Helper function to properly render content in the HTML template"""
-    full_template = HTML_TEMPLATE.replace('{% block content %}{% endblock %}', 
-                                          '{% block content %}' + content + '{% endblock %}')
-    return render_template_string(full_template, **kwargs)
-
-def login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'logged_in' not in session:
-            return redirect(url_for('login'))
-        return f(*args, **kwargs)
-    return decorated_function
-
-# HTML Template (embedded for single file deployment)
-HTML_TEMPLATE = '''
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Metropolis Parking Management</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <style>
-        :root {
-            --primary: #1e88e5;
-            --secondary: #00acc1;
-            --success: #43a047;
-            --danger: #e53935;
-            --warning: #fb8c00;
-            --dark: #212121;
-            --light: #f5f5f5;
-            --gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }
-        
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-        }
-        
-        .login-container {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-        }
-        
-        .login-card {
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 20px;
-            padding: 40px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            width: 400px;
-            backdrop-filter: blur(10px);
-        }
-        
-        .navbar {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            padding: 1rem 0;
-        }
-        
-        .navbar-brand {
-            font-weight: bold;
-            font-size: 1.5rem;
-            color: white!important;
-        }
-        
-        .nav-link {
-            color: rgba(255,255,255,0.9)!important;
-            margin: 0 10px;
-            border-radius: 5px;
-            transition: all 0.3s;
-        }
-        
-        .nav-link:hover, .nav-link.active {
-            background: rgba(255,255,255,0.2);
-            color: white!important;
-        }
-        
-        .main-container {
-            background: white;
-            min-height: 100vh;
-            padding-top: 70px;
-        }
-        
-        .dashboard-card {
-            background: white;
-            border-radius: 15px;
-            padding: 25px;
-            margin-bottom: 25px;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
-            transition: transform 0.3s, box-shadow 0.3s;
-        }
-        
-        .dashboard-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.15);
-        }
-        
-        .stat-card {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border-radius: 15px;
-            padding: 30px;
-            text-align: center;
-            margin-bottom: 25px;
-        }
-        
-        .stat-number {
-            font-size: 3rem;
-            font-weight: bold;
-            margin: 10px 0;
-        }
-        
-        .btn-custom {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            padding: 12px 30px;
-            border-radius: 25px;
-            font-weight: 600;
-            transition: all 0.3s;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        
-        .btn-custom:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
-            color: white;
-        }
-        
-        .gate-btn {
-            width: 100%;
-            padding: 20px;
-            margin: 10px 0;
-            border-radius: 10px;
-            font-size: 1.2rem;
-            font-weight: bold;
-            transition: all 0.3s;
-        }
-        
-        .gate-btn.entry {
-            background: linear-gradient(135deg, #00c851 0%, #00695c 100%);
-            color: white;
-            border: none;
-        }
-        
-        .gate-btn.exit {
-            background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%);
-            color: white;
-            border: none;
-        }
-        
-        .gate-btn:hover {
-            transform: scale(1.05);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-        }
-        
-        .table-custom {
-            background: white;
-            border-radius: 10px;
-            overflow: hidden;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
-        }
-        
-        .table-custom thead {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-        
-        .badge-custom {
-            padding: 8px 15px;
-            border-radius: 20px;
-            font-weight: 600;
-        }
-        
-        .loading-spinner {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 3px solid rgba(255,255,255,.3);
-            border-radius: 50%;
-            border-top-color: #fff;
-            animation: spin 1s ease-in-out infinite;
-        }
-        
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        
-        .camera-feed {
-            background: #000;
-            border-radius: 10px;
-            padding: 10px;
-            margin: 10px;
-            text-align: center;
-        }
-        
-        .camera-feed img {
-            max-width: 100%;
-            border-radius: 5px;
-        }
-        
-        .alert-custom {
-            border-radius: 10px;
-            border: none;
-            padding: 15px 20px;
-        }
-        
-        .tab-content {
-            padding: 30px;
-            background: #f8f9fa;
-            border-radius: 0 0 15px 15px;
-        }
-        
-        .nav-tabs .nav-link {
-            color: #666;
-            border: none;
-            padding: 15px 25px;
-            font-weight: 600;
-        }
-        
-        .nav-tabs .nav-link.active {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border-radius: 10px 10px 0 0;
-        }
-        
-        .form-control:focus {
-            border-color: #667eea;
-            box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
-        }
-        
-        .modal-content {
-            border-radius: 15px;
-        }
-        
-        .modal-header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border-radius: 15px 15px 0 0;
-        }
-        
-        @media (max-width: 768px) {
-            .dashboard-card {
-                margin-bottom: 15px;
-            }
-            
-            .stat-card {
-                margin-bottom: 15px;
-            }
-        }
-    </style>
-</head>
-<body>
-    {% if session.get('logged_in') %}
-    <!-- Navigation -->
-    <nav class="navbar navbar-expand-lg navbar-dark fixed-top">
-        <div class="container-fluid">
-            <a class="navbar-brand" href="/">
-                <i class="fas fa-parking"></i> Metropolis Parking
-            </a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav ms-auto">
-                    <li class="nav-item">
-                        <a class="nav-link" href="/" id="nav-dashboard">
-                            <i class="fas fa-tachometer-alt"></i> Dashboard
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/gates" id="nav-gates">
-                            <i class="fas fa-door-open"></i> Gates
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/transactions" id="nav-transactions">
-                            <i class="fas fa-receipt"></i> Transactions
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/members" id="nav-members">
-                            <i class="fas fa-users"></i> Members
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/visitor" id="nav-visitor">
-                            <i class="fas fa-user-plus"></i> Visitor Pass
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/directory" id="nav-directory">
-                            <i class="fas fa-address-book"></i> Member Directory
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/logout">
-                            <i class="fas fa-sign-out-alt"></i> Logout
-                        </a>
-                    </li>
-                </ul>
-            </div>
-        </div>
-    </nav>
-
-    <!-- Main Content -->
-    <div class="main-container">
-        <div class="container-fluid pt-4">
-            {% block content %}{% endblock %}
-        </div>
-    </div>
-    {% else %}
-    <!-- Login Page -->
-    <div class="login-container">
-        <div class="login-card">
-            <h2 class="text-center mb-4">
-                <i class="fas fa-parking" style="color: #667eea;"></i>
-                <br>
-                Metropolis Parking
-            </h2>
-            <form method="POST" action="/login">
-                <div class="mb-3">
-                    <label class="form-label">Password</label>
-                    <input type="password" class="form-control" name="password" required>
-                </div>
-                <button type="submit" class="btn btn-custom w-100">
-                    <i class="fas fa-sign-in-alt"></i> Login
-                </button>
-            </form>
-            {% with messages = get_flashed_messages(with_categories=true) %}
-                {% if messages %}
-                    {% for category, message in messages %}
-                    <div class="alert alert-{{ 'danger' if category == 'error' else category }} mt-3">
-                        {{ message }}
-                    </div>
-                    {% endfor %}
-                {% endif %}
-            {% endwith %}
-        </div>
-    </div>
-    {% endif %}
-
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-        // Set active nav item (vanilla JavaScript - no jQuery required)
-        document.addEventListener('DOMContentLoaded', function() {
-            const path = window.location.pathname;
-
-            // Remove active class from all nav links
-            document.querySelectorAll('.nav-link').forEach(function(link) {
-                link.classList.remove('active');
-            });
-
-            // Add active class to current page
-            if (path === '/') {
-                const el = document.getElementById('nav-dashboard');
-                if (el) el.classList.add('active');
-            } else if (path.includes('gates')) {
-                const el = document.getElementById('nav-gates');
-                if (el) el.classList.add('active');
-            } else if (path.includes('transactions')) {
-                const el = document.getElementById('nav-transactions');
-                if (el) el.classList.add('active');
-            } else if (path.includes('members')) {
-                const el = document.getElementById('nav-members');
-                if (el) el.classList.add('active');
-            } else if (path.includes('visitor')) {
-                const el = document.getElementById('nav-visitor');
-                if (el) el.classList.add('active');
-            } else if (path.includes('directory')) {
-                const el = document.getElementById('nav-directory');
-                if (el) el.classList.add('active');
-            }
-        });
-
-        // Auto-refresh functions
-        function autoRefresh(elementId, url, interval) {
-            function refresh() {
-                fetch(url)
-                    .then(response => response.json())
-                    .then(data => {
-                        document.getElementById(elementId).innerHTML = data.html || JSON.stringify(data, null, 2);
-                    })
-                    .catch(error => console.error('Error:', error));
-            }
-            refresh();
-            setInterval(refresh, interval);
-        }
-
-        // Gate control
-        function openGate(laneId, gateName, siteId) {
-            if (!confirm(`Open ${gateName}?`)) return;
-            
-            fetch('/api/open-gate', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    lane_id: laneId,
-                    gate_name: gateName,
-                    site_id: siteId
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    alert(`${gateName} opened successfully!`);
-                } else {
-                    alert(`Error: ${data.message}`);
-                }
-            })
-            .catch(error => {
-                alert(`Error: ${error}`);
-            });
-        }
-
-        // Member management
-        function addMember() {
-            const plate = document.getElementById('member-plate').value.trim().toUpperCase();
-            if (!plate) return;
-            
-            fetch('/api/members/add', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({plate: plate})
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    location.reload();
-                } else {
-                    alert(data.message);
-                }
-            });
-        }
-
-        function removeMember(plate) {
-            if (!confirm(`Remove ${plate} from members?`)) return;
-            
-            fetch('/api/members/remove', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({plate: plate})
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    location.reload();
-                }
-            });
-        }
-
-        // Blacklist management
-        function addBlacklist() {
-            const plate = document.getElementById('blacklist-plate').value.trim().toUpperCase();
-            const reason = document.getElementById('blacklist-reason').value.trim();
-            if (!plate) return;
-            
-            fetch('/api/blacklist/add', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({plate: plate, reason: reason})
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    location.reload();
-                } else {
-                    alert(data.message);
-                }
-            });
-        }
-
-        function removeBlacklist(plate) {
-            if (!confirm(`Remove ${plate} from blacklist?`)) return;
-            
-            fetch('/api/blacklist/remove', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({plate: plate})
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    location.reload();
-                }
-            });
-        }
-
-        // Create visitor pass
-        function createVisitorPass() {
-            const plate = document.getElementById('visitor-plate').value.trim().toUpperCase();
-            const hours = document.getElementById('visitor-hours').value;
-            const siteId = document.getElementById('visitor-site').value;
-            
-            if (!plate || !hours) {
-                alert('Please fill all fields');
-                return;
-            }
-            
-            fetch('/api/visitor-pass', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    plate: plate,
-                    hours: hours,
-                    site_id: siteId
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    document.getElementById('visitor-result').innerHTML = `
-                        <div class="alert alert-success">
-                            <h5>Visitor Pass Created!</h5>
-                            <p>Plate: ${data.plate}</p>
-                            <p>Valid until: ${data.valid_until}</p>
-                            <p>Site: ${data.site}</p>
-                        </div>
-                    `;
-                } else {
-                    alert(`Error: ${data.message}`);
-                }
-            });
-        }
-    </script>
-</body>
-</html>
-'''
-
-# Routes
+# API Endpoints
 @app.route('/')
-@login_required
-def dashboard():
-    # Check token status
-    token_info = {
-        'valid': token_status.get('valid', False),
-        'last_check': token_status.get('last_check', 'Never').strftime('%Y-%m-%d %H:%M:%S') if isinstance(token_status.get('last_check'), datetime) else 'Never',
-        'last_refresh': token_status.get('last_refresh', 'Never').strftime('%Y-%m-%d %H:%M:%S') if isinstance(token_status.get('last_refresh'), datetime) else 'Never',
-        'error': token_status.get('error', None),
-        'auto_refresh': AUTO_TOKEN_REFRESH and HAS_SELENIUM,
-        'selenium_available': HAS_SELENIUM
-    }
-    
-    content = '''
-    <div class="row">
-        <div class="col-12">
-            <h1 class="mb-4">Dashboard</h1>
-        </div>
-    </div>
-
-    <!-- System Status Cards -->
-    <div class="row mb-4">
-        <!-- Token Status Card -->
-        <div class="col-md-6">
-            <div class="dashboard-card" style="border-left: 4px solid {{ '#43a047' if token_info.valid else '#e53935' }};">
-                <h4>
-                    <i class="fas fa-key"></i> API Token Status
-                    {% if token_info.valid %}
-                        <span class="badge bg-success ms-2">✅ Valid</span>
-                    {% else %}
-                        <span class="badge bg-danger ms-2">❌ Invalid</span>
-                    {% endif %}
-                </h4>
-                <p class="mb-1">
-                    <strong>Last Check:</strong> <span id="last-check-time">{{ token_info.last_check }}</span><br>
-                    <strong>Last Refresh:</strong> <span id="last-refresh-time">{{ token_info.last_refresh }}</span><br>
-                    <strong>Auto-Refresh:</strong>
-                    {% if token_info.auto_refresh %}
-                        <span class="text-success"><i class="fas fa-check-circle"></i> Enabled (every 3 min)</span>
-                    {% elif not token_info.selenium_available %}
-                        <span class="text-warning"><i class="fas fa-exclamation-triangle"></i> Selenium not installed</span>
-                    {% else %}
-                        <span class="text-muted">Disabled</span>
-                    {% endif %}
-                </p>
-
-                <!-- Countdown Timer with Spinner -->
-                {% if token_info.auto_refresh %}
-                <div class="alert alert-info mb-2 mt-3" id="token-countdown-container">
-                    <div class="d-flex align-items-center">
-                        <div class="spinner-border spinner-border-sm text-primary me-2" role="status" id="token-spinner">
-                            <span class="visually-hidden">Checking...</span>
-                        </div>
-                        <div style="flex-grow: 1;">
-                            <strong><i class="fas fa-clock"></i> Next check in: <span id="token-countdown" class="text-primary">3:00</span></strong><br>
-                            <small class="text-muted" id="token-status-text">Waiting for next automatic check...</small>
-                        </div>
-                    </div>
-                    <div class="progress mt-2" style="height: 8px;">
-                        <div class="progress-bar progress-bar-striped progress-bar-animated bg-info"
-                             id="token-progress"
-                             role="progressbar"
-                             style="width: 100%"></div>
-                    </div>
-                </div>
-                {% endif %}
-
-                {% if token_info.error %}
-                <div class="alert alert-warning mb-0 mt-2">
-                    <i class="fas fa-exclamation-triangle"></i> {{ token_info.error }}
-                </div>
-                {% endif %}
-                <div class="mt-3">
-                    <button class="btn btn-sm btn-primary me-2" onclick="testToken()">
-                        <i class="fas fa-check-circle"></i> Test Token
-                    </button>
-                    <button class="btn btn-sm btn-success" onclick="refreshToken()" {% if not token_info.selenium_available %}disabled title="Selenium not installed"{% endif %}>
-                        <i class="fas fa-sync"></i> Get New Token
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Member Auto-Gate Status Card -->
-        <div class="col-md-6">
-            <div class="dashboard-card" style="border-left: 4px solid #43a047;">
-                <h4>
-                    <i class="fas fa-car"></i> Member Auto-Gate Monitor
-                    <span class="badge bg-success ms-2" id="member-monitor-badge">✅ ACTIVE</span>
-                </h4>
-                <p class="mb-1" id="member-monitor-info">
-                    <strong>Status:</strong> <span class="text-success">Running in background</span><br>
-                    <strong>Monitoring:</strong> {{ member_count }} member plates<br>
-                    <strong>Blacklist:</strong> {{ blacklist_count }} blocked plates<br>
-                    <strong>Check Interval:</strong> Every 3 seconds
-                </p>
-                <div class="alert alert-info mb-0 mt-2">
-                    <i class="fas fa-info-circle"></i> Gates will auto-open for registered members
-                </div>
-                <div class="mt-3">
-                    <button class="btn btn-sm btn-danger" onclick="toggleMemberMonitoring()" id="member-monitor-btn">
-                        <i class="fas fa-stop"></i> Stop Monitoring
-                    </button>
-                    <a href="/members" class="btn btn-sm btn-primary">
-                        <i class="fas fa-users"></i> Manage Members
-                    </a>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <div class="row">
-        <!-- Statistics -->
-        <div class="col-md-3 col-sm-6">
-            <div class="stat-card">
-                <i class="fas fa-car fa-3x mb-3"></i>
-                <div class="stat-number" id="occupancy-555">--</div>
-                <div>555 Capitol Occupancy</div>
-            </div>
-        </div>
-        <div class="col-md-3 col-sm-6">
-            <div class="stat-card" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
-                <i class="fas fa-car fa-3x mb-3"></i>
-                <div class="stat-number" id="occupancy-boa">--</div>
-                <div>Bank of America Occupancy</div>
-            </div>
-        </div>
-        <div class="col-md-3 col-sm-6">
-            <div class="stat-card" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
-                <i class="fas fa-clock fa-3x mb-3"></i>
-                <div class="stat-number" id="waiting-count">--</div>
-                <div>Cars Waiting at Exit</div>
-            </div>
-        </div>
-        <div class="col-md-3 col-sm-6">
-            <div class="stat-card" style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);">
-                <i class="fas fa-users fa-3x mb-3"></i>
-                <div class="stat-number">{{ member_count }}</div>
-                <div>Active Members</div>
-            </div>
-        </div>
-    </div>
-    
-    <div class="row mt-4">
-        <!-- Recent Transactions -->
-        <div class="col-md-6">
-            <div class="dashboard-card">
-                <h3 class="mb-3">
-                    <i class="fas fa-receipt"></i> Recent Transactions
-                </h3>
-                <div id="recent-transactions" style="max-height: 400px; overflow-y: auto;">
-                    <div class="text-center">
-                        <div class="loading-spinner"></div>
-                        <p>Loading...</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Quick Actions -->
-        <div class="col-md-6">
-            <div class="dashboard-card">
-                <h3 class="mb-3">
-                    <i class="fas fa-bolt"></i> Quick Actions
-                </h3>
-                <div class="d-grid gap-2">
-                    <a href="/gates" class="btn btn-custom">
-                        <i class="fas fa-door-open"></i> Open Gates
-                    </a>
-                    <a href="/visitor" class="btn btn-custom">
-                        <i class="fas fa-user-plus"></i> Create Visitor Pass
-                    </a>
-                    <a href="/transactions" class="btn btn-custom">
-                        <i class="fas fa-search"></i> Search Transactions
-                    </a>
-                    <a href="/members" class="btn btn-custom">
-                        <i class="fas fa-users"></i> Manage Members
-                    </a>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <script>
-        // Token management functions
-        function testToken() {
-            fetch('/api/test-token')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.valid) {
-                        alert('✅ Token is valid and working!');
-                    } else {
-                        alert('❌ Token is invalid or expired!\\n' + (data.error || ''));
-                    }
-                    setTimeout(() => location.reload(), 1000);
-                })
-                .catch(error => {
-                    alert('Error testing token: ' + error);
-                });
-        }
-        
-        function refreshToken() {
-            if (!confirm('This will get a new token from Metropolis. Continue?')) return;
-            
-            const btn = event.target;
-            btn.disabled = true;
-            btn.innerHTML = '<span class="loading-spinner"></span> Getting new token...';
-            
-            fetch('/api/refresh-token', {method: 'POST'})
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        alert('✅ Token refreshed successfully!');
-                        location.reload();
-                    } else {
-                        alert('❌ Failed to refresh token:\\n' + (data.error || 'Unknown error'));
-                        btn.disabled = false;
-                        btn.innerHTML = '<i class="fas fa-sync"></i> Get New Token';
-                    }
-                })
-                .catch(error => {
-                    alert('Error refreshing token: ' + error);
-                    btn.disabled = false;
-                    btn.innerHTML = '<i class="fas fa-sync"></i> Get New Token';
-                });
-        }
-
-        // Toggle member monitoring
-        function toggleMemberMonitoring() {
-            const btn = document.getElementById('member-monitor-btn');
-            const badge = document.getElementById('member-monitor-badge');
-
-            btn.disabled = true;
-            btn.innerHTML = '<span class="loading-spinner"></span> Processing...';
-
-            fetch('/api/toggle-member-monitoring', {method: 'POST'})
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        if (data.status === 'started') {
-                            badge.className = 'badge bg-success ms-2';
-                            badge.textContent = '✅ ACTIVE';
-                            btn.className = 'btn btn-sm btn-danger';
-                            btn.innerHTML = '<i class="fas fa-stop"></i> Stop Monitoring';
-                        } else {
-                            badge.className = 'badge bg-danger ms-2';
-                            badge.textContent = '❌ STOPPED';
-                            btn.className = 'btn btn-sm btn-success';
-                            btn.innerHTML = '<i class="fas fa-play"></i> Start Monitoring';
-                        }
-                    }
-                    btn.disabled = false;
-                })
-                .catch(error => {
-                    alert('Error toggling monitoring: ' + error);
-                    btn.disabled = false;
-                    btn.innerHTML = '<i class="fas fa-stop"></i> Stop Monitoring';
-                });
-        }
-
-        // Token Countdown Timer
-        let lastCheckTime = null;
-        let countdownInterval = null;
-
-        function updateTokenCountdown() {
-            const countdownEl = document.getElementById('token-countdown');
-            const progressEl = document.getElementById('token-progress');
-            const statusTextEl = document.getElementById('token-status-text');
-            const spinnerEl = document.getElementById('token-spinner');
-
-            // Check all required elements exist
-            if (!countdownEl || !progressEl || !statusTextEl || !spinnerEl) {
-                console.error('Token countdown elements not found');
-                return;
-            }
-
-            if (!lastCheckTime) {
-                console.error('lastCheckTime not set');
-                return;
-            }
-
-            const now = new Date().getTime();
-            const timeSinceCheck = Math.floor((now - lastCheckTime) / 1000); // seconds
-            const timeUntilNext = Math.max(0, 180 - timeSinceCheck); // 180 seconds = 3 minutes
-
-            const minutes = Math.floor(timeUntilNext / 60);
-            const seconds = timeUntilNext % 60;
-
-            // Update countdown display
-            countdownEl.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-
-            // Update progress bar (inverse - starts at 100%, goes to 0%)
-            const progressPercent = (timeUntilNext / 180) * 100;
-            progressEl.style.width = progressPercent + '%';
-
-            // Change color as time runs out
-            if (timeUntilNext <= 10) {
-                progressEl.className = 'progress-bar progress-bar-striped progress-bar-animated bg-danger';
-                statusTextEl.textContent = 'Checking now...';
-            } else if (timeUntilNext <= 30) {
-                progressEl.className = 'progress-bar progress-bar-striped progress-bar-animated bg-warning';
-                statusTextEl.textContent = 'Checking soon...';
-            } else {
-                progressEl.className = 'progress-bar progress-bar-striped progress-bar-animated bg-info';
-                statusTextEl.textContent = 'Waiting for next automatic check...';
-            }
-
-            // When countdown reaches 0, fetch new status
-            if (timeUntilNext === 0) {
-                statusTextEl.textContent = '🔄 Checking token now...';
-
-                // Fetch updated token status
-                setTimeout(function() {
-                    console.log('Fetching updated token status...');
-                    fetch('/api/token-status')
-                        .then(response => response.json())
-                        .then(data => {
-                            console.log('Token status updated:', data);
-
-                            // Update last check time
-                            if (data.last_check && data.last_check !== 'Never') {
-                                lastCheckTime = new Date(data.last_check).getTime();
-                                document.getElementById('last-check-time').textContent = data.last_check;
-                                console.log('Updated last check time to:', data.last_check);
-                            }
-
-                            // Update last refresh time
-                            if (data.last_refresh && data.last_refresh !== 'Never') {
-                                document.getElementById('last-refresh-time').textContent = data.last_refresh;
-                            }
-                        })
-                        .catch(error => {
-                            console.error('Token status fetch error:', error);
-                        });
-                }, 2000);
-            }
-        }
-
-        function initTokenCountdown() {
-            // Check if countdown container exists
-            const countdownContainer = document.getElementById('token-countdown-container');
-            if (!countdownContainer) {
-                console.log('Token countdown container not found - auto-refresh may be disabled');
-                return;
-            }
-
-            // Get initial last check time from the page
-            const lastCheckText = document.getElementById('last-check-time').textContent;
-
-            console.log('Initializing token countdown with last check:', lastCheckText);
-
-            if (lastCheckText && lastCheckText !== 'Never') {
-                try {
-                    lastCheckTime = new Date(lastCheckText).getTime();
-                    console.log('Parsed last check time:', new Date(lastCheckTime));
-                } catch (e) {
-                    console.error('Could not parse last check time:', e);
-                    lastCheckTime = new Date().getTime();
-                }
-            } else {
-                // If never checked, assume just checked now
-                console.log('No last check time, using current time');
-                lastCheckTime = new Date().getTime();
-            }
-
-            // Update countdown every second
-            if (countdownInterval) {
-                clearInterval(countdownInterval);
-            }
-            countdownInterval = setInterval(updateTokenCountdown, 1000);
-
-            // Initial update
-            updateTokenCountdown();
-            console.log('Token countdown timer started');
-        }
-
-        // Auto-refresh occupancy and transactions after page loads
-        document.addEventListener('DOMContentLoaded', function() {
-            console.log('DOM loaded, initializing...');
-
-            autoRefresh('occupancy-555', '/api/occupancy/4005', 5000);
-            autoRefresh('occupancy-boa', '/api/occupancy/4007', 5000);
-            autoRefresh('waiting-count', '/api/waiting-count', 5000);
-            autoRefresh('recent-transactions', '/api/recent-transactions', 3000);
-
-            // Start token countdown timer
-            console.log('Starting token countdown...');
-            initTokenCountdown();
-
-            // Check monitoring status every 5 seconds
-            setInterval(function() {
-                fetch('/api/monitoring-status')
-                    .then(response => response.json())
-                    .then(data => {
-                        const badge = document.getElementById('member-monitor-badge');
-                        const btn = document.getElementById('member-monitor-btn');
-
-                        if (data.member_monitor) {
-                            badge.className = 'badge bg-success ms-2';
-                            badge.textContent = '✅ ACTIVE';
-                            btn.className = 'btn btn-sm btn-danger';
-                            btn.innerHTML = '<i class="fas fa-stop"></i> Stop Monitoring';
-                        } else {
-                            badge.className = 'badge bg-danger ms-2';
-                            badge.textContent = '❌ STOPPED';
-                            btn.className = 'btn btn-sm btn-success';
-                            btn.innerHTML = '<i class="fas fa-play"></i> Start Monitoring';
-                        }
-                    })
-                    .catch(error => console.error('Monitoring status check error:', error));
-            }, 5000);
-
-            // Update token status every 30 seconds (in case of changes)
-            setInterval(function() {
-                fetch('/api/token-status')
-                    .then(response => response.json())
-                    .then(data => {
-                        // Update last check time if changed
-                        if (data.last_check && data.last_check !== 'Never') {
-                            const newCheckTime = new Date(data.last_check).getTime();
-                            if (newCheckTime !== lastCheckTime) {
-                                lastCheckTime = newCheckTime;
-                                document.getElementById('last-check-time').textContent = data.last_check;
-                            }
-                        }
-
-                        // Update last refresh time
-                        if (data.last_refresh && data.last_refresh !== 'Never') {
-                            document.getElementById('last-refresh-time').textContent = data.last_refresh;
-                        }
-                    })
-                    .catch(error => console.error('Token status update error:', error));
-            }, 30000);
-        });
-    </script>
-    '''
-
-    return render_content(content, member_count=len(member_plates), blacklist_count=len(blacklist_plates), token_info=token_info)
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        password = request.form.get('password')
-        if password == ADMIN_PASSWORD:
-            session['logged_in'] = True
-            return redirect(url_for('dashboard'))
-        else:
-            return render_template_string(HTML_TEMPLATE, error='Invalid password')
+def index():
     return render_template_string(HTML_TEMPLATE)
 
-@app.route('/logout')
-def logout():
-    session.pop('logged_in', None)
-    return redirect(url_for('login'))
-
-@app.route('/gates')
-@login_required
-def gates():
-    content = '''
-    <div class="row">
-        <div class="col-12">
-            <h1 class="mb-4">Gate Control</h1>
-        </div>
-    </div>
-
-    <div class="row">
-        <!-- 555 Capitol Mall Gates -->
-        <div class="col-md-6">
-            <div class="dashboard-card">
-                <h3 class="text-center mb-4">555 Capitol Mall</h3>
-                <button class="gate-btn exit" onclick="openGate('5568', '6th Street Exit', '4005')">
-                    <i class="fas fa-door-open"></i> 6th Street Exit
-                </button>
-                <button class="gate-btn exit" onclick="openGate('5569', 'L Street Exit', '4005')">
-                    <i class="fas fa-door-open"></i> L Street Exit
-                </button>
-            </div>
-        </div>
-
-        <!-- Bank of America Gates -->
-        <div class="col-md-6">
-            <div class="dashboard-card">
-                <h3 class="text-center mb-4">Bank of America</h3>
-                <button class="gate-btn exit" onclick="openGate('5565', 'Bank of America Exit', '4007')">
-                    <i class="fas fa-door-open"></i> Bank of America Exit
-                </button>
-            </div>
-        </div>
-    </div>
+@app.route('/api/status')
+def status():
+    exp_time = get_token_expiration_time(AUTH_KEY)
+    token_status = "Unknown"
+    if exp_time:
+        time_remaining = exp_time - datetime.now()
+        hours = int(time_remaining.total_seconds() // 3600)
+        minutes = int((time_remaining.total_seconds() % 3600) // 60)
+        token_status = f"{hours}h {minutes}m remaining"
+        if is_token_expired(AUTH_KEY):
+            token_status = "EXPIRED/EXPIRING SOON"
     
-    <div class="row mt-4">
-        <div class="col-12">
-            <div class="dashboard-card">
-                <h3 class="mb-3">Gate Status</h3>
-                <div id="gate-status">
-                    <p class="text-muted">Click a gate button to open it</p>
-                </div>
-            </div>
-        </div>
-    </div>
-    '''
-    
-    return render_content(content)
+    return jsonify({
+        "monitoring": "ON" if monitoring_active else "OFF",
+        "token_monitor": "ON" if token_monitor_active else "OFF",
+        "token_status": token_status,
+        "last_action": current_status.get("last_action", "None"),
+        "members_count": len(member_plates),
+        "blacklist_count": len(blacklist_plates)
+    })
 
-@app.route('/transactions')
-@login_required
-def transactions():
-    content = '''
-    <div class="row">
-        <div class="col-12">
-            <h1 class="mb-4">
-                <i class="fas fa-receipt"></i> Live Vehicle Activity
-            </h1>
-        </div>
-    </div>
-
-    <div class="dashboard-card mb-3">
-        <div class="row">
-            <div class="col-md-4">
-                <label>Filter by Plate</label>
-                <input type="text" class="form-control" id="filter-plate" placeholder="Enter plate number">
-            </div>
-            <div class="col-md-3">
-                <label>Site</label>
-                <select class="form-control" id="filter-site">
-                    <option value="all">All Sites</option>
-                    <option value="4005">555 Capitol Mall</option>
-                    <option value="4007">Bank of America</option>
-                </select>
-            </div>
-            <div class="col-md-3">
-                <label>Type</label>
-                <select class="form-control" id="filter-type">
-                    <option value="all">Entry & Exit</option>
-                    <option value="entry">Entry Only</option>
-                    <option value="exit">Exit Only</option>
-                </select>
-            </div>
-            <div class="col-md-2">
-                <label>&nbsp;</label>
-                <button class="btn btn-custom w-100" onclick="loadTransactions()">
-                    <i class="fas fa-sync"></i> Refresh
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Transaction Cards Container -->
-    <div id="transaction-cards" style="max-height: 700px; overflow-y: auto;">
-        <div class="text-center">
-            <div class="loading-spinner"></div>
-            <p>Loading recent activity...</p>
-        </div>
-    </div>
-
-    <script>
-        function loadTransactions() {
-            const plate = document.getElementById('filter-plate').value;
-            const site = document.getElementById('filter-site').value;
-            const type = document.getElementById('filter-type').value;
-
-            document.getElementById('transaction-cards').innerHTML =
-                '<div class="text-center"><div class="loading-spinner"></div><p>Loading...</p></div>';
-
-            fetch('/api/recent-activity', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({plate: plate, site: site, type: type})
-            })
-            .then(response => response.json())
-            .then(data => {
-                document.getElementById('transaction-cards').innerHTML = data.html;
-            })
-            .catch(error => {
-                document.getElementById('transaction-cards').innerHTML =
-                    '<div class="alert alert-danger">Error loading activity: ' + error + '</div>';
-            });
-        }
-
-        // Auto-load on page load
-        loadTransactions();
-
-        // Auto-refresh every 10 seconds
-        setInterval(loadTransactions, 10000);
-    </script>
-    '''
-    return render_content(content)
-
-@app.route('/members')
-@login_required
-def members():
-    content = '''
-    <div class="row">
-        <div class="col-12">
-            <h1 class="mb-4">Member Management</h1>
-        </div>
-    </div>
-    
-    <ul class="nav nav-tabs" role="tablist">
-        <li class="nav-item">
-            <a class="nav-link active" data-bs-toggle="tab" href="#members-tab">Members</a>
-        </li>
-        <li class="nav-item">
-            <a class="nav-link" data-bs-toggle="tab" href="#blacklist-tab">Blacklist</a>
-        </li>
-    </ul>
-    
-    <div class="tab-content">
-        <!-- Members Tab -->
-        <div id="members-tab" class="tab-pane active">
-            <div class="dashboard-card">
-                <h3>Add Member</h3>
-                <div class="row">
-                    <div class="col-md-8">
-                        <input type="text" class="form-control" id="member-plate" 
-                               placeholder="Enter license plate" style="text-transform: uppercase;">
-                    </div>
-                    <div class="col-md-4">
-                        <button class="btn btn-custom w-100" onclick="addMember()">
-                            <i class="fas fa-plus"></i> Add Member
-                        </button>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="dashboard-card mt-4">
-                <h3>Current Members ({{ members|length }})</h3>
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>License Plate</th>
-                                <th>Added</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for member in members %}
-                            <tr>
-                                <td><strong>{{ member }}</strong></td>
-                                <td>{{ current_time }}</td>
-                                <td>
-                                    <button class="btn btn-sm btn-danger" 
-                                            onclick="removeMember('{{ member }}')">
-                                        <i class="fas fa-trash"></i> Remove
-                                    </button>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Blacklist Tab -->
-        <div id="blacklist-tab" class="tab-pane">
-            <div class="dashboard-card">
-                <h3>Add to Blacklist</h3>
-                <div class="row">
-                    <div class="col-md-4">
-                        <input type="text" class="form-control" id="blacklist-plate" 
-                               placeholder="License plate" style="text-transform: uppercase;">
-                    </div>
-                    <div class="col-md-4">
-                        <input type="text" class="form-control" id="blacklist-reason" 
-                               placeholder="Reason">
-                    </div>
-                    <div class="col-md-4">
-                        <button class="btn btn-danger w-100" onclick="addBlacklist()">
-                            <i class="fas fa-ban"></i> Add to Blacklist
-                        </button>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="dashboard-card mt-4">
-                <h3>Blacklisted Vehicles ({{ blacklist|length }})</h3>
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>License Plate</th>
-                                <th>Reason</th>
-                                <th>Added</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for item in blacklist %}
-                            <tr>
-                                <td><strong>{{ item['plate'] }}</strong></td>
-                                <td>{{ item.get('reason', 'N/A') }}</td>
-                                <td>{{ current_time }}</td>
-                                <td>
-                                    <button class="btn btn-sm btn-success" 
-                                            onclick="removeBlacklist('{{ item['plate'] }}')">
-                                        <i class="fas fa-check"></i> Remove
-                                    </button>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
-    '''
-    return render_content(content, members=member_plates, 
-                         blacklist=[{'plate': p} for p in blacklist_plates], 
-                         current_time=datetime.now().strftime('%Y-%m-%d %H:%M'))
-
-@app.route('/visitor')
-@login_required
-def visitor():
-    content = '''
-    <div class="row">
-        <div class="col-12">
-            <h1 class="mb-4">Create Visitor Pass</h1>
-        </div>
-    </div>
-    
-    <div class="row">
-        <div class="col-md-6">
-            <div class="dashboard-card">
-                <h3>Visitor Information</h3>
-                <form onsubmit="createVisitorPass(); return false;">
-                    <div class="mb-3">
-                        <label>License Plate</label>
-                        <input type="text" class="form-control" id="visitor-plate" 
-                               placeholder="Enter plate number" required style="text-transform: uppercase;">
-                    </div>
-                    <div class="mb-3">
-                        <label>Valid for (hours)</label>
-                        <select class="form-control" id="visitor-hours">
-                            <option value="1">1 Hour</option>
-                            <option value="2">2 Hours</option>
-                            <option value="4" selected>4 Hours</option>
-                            <option value="8">8 Hours</option>
-                            <option value="24">24 Hours</option>
-                        </select>
-                    </div>
-                    <div class="mb-3">
-                        <label>Site</label>
-                        <select class="form-control" id="visitor-site">
-                            <option value="4005">555 Capitol Mall</option>
-                            <option value="4007">Bank of America</option>
-                        </select>
-                    </div>
-                    <button type="submit" class="btn btn-custom w-100">
-                        <i class="fas fa-ticket-alt"></i> Create Pass
-                    </button>
-                </form>
-            </div>
-        </div>
-        
-        <div class="col-md-6">
-            <div class="dashboard-card">
-                <h3>Pass Details</h3>
-                <div id="visitor-result">
-                    <div class="text-center text-muted">
-                        <i class="fas fa-ticket-alt fa-4x mb-3"></i>
-                        <p>Fill in the form to create a visitor pass</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    '''
-    return render_content(content)
-
-@app.route('/directory')
-@login_required
-def directory():
-    content = '''
-    <div class="row">
-        <div class="col-12">
-            <h1 class="mb-4">
-                <i class="fas fa-address-book"></i> Member Directory
-            </h1>
-            <p class="text-muted">All members with active subscriptions or recent visits</p>
-        </div>
-    </div>
-
-    <!-- Member Directory Container -->
-    <div id="member-directory-container" style="max-height: 700px; overflow-y: auto;">
-        <div class="text-center">
-            <div class="loading-spinner"></div>
-            <p>Loading member directory...</p>
-        </div>
-    </div>
-
-    <div class="text-center mt-3">
-        <button class="btn btn-custom" onclick="loadMemberDirectory()">
-            <i class="fas fa-sync"></i> Refresh Directory
-        </button>
-    </div>
-
-    <script>
-        function loadMemberDirectory() {
-            document.getElementById('member-directory-container').innerHTML =
-                '<div class="text-center"><div class="loading-spinner"></div><p>Loading...</p></div>';
-
-            fetch('/api/member-directory')
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById('member-directory-container').innerHTML = data.html;
-                })
-                .catch(error => {
-                    document.getElementById('member-directory-container').innerHTML =
-                        '<div class="alert alert-danger">Error loading directory: ' + error + '</div>';
-                });
-        }
-
-        // Load immediately and refresh every 30 seconds
-        loadMemberDirectory();
-        setInterval(loadMemberDirectory, 30000);
-    </script>
-    '''
-    return render_content(content)
-
-# API Routes
-@app.route('/api/open-gate', methods=['POST'])
-@login_required
+@app.route('/api/open_gate', methods=['POST'])
 def api_open_gate():
     data = request.json
     lane_id = data.get('lane_id')
     gate_name = data.get('gate_name')
     site_id = data.get('site_id', SITE_ID)
-    visit_id = data.get('visit_id', None)  # Optional visitId parameter
-
-    # Build endpoint - matches WORKING_GATE_OPENER.py exactly
-    endpoint = f"/api/specialist/site/{site_id}/lane/{lane_id}/open-gate"
-
-    # Add visitId parameter if provided
-    if visit_id:
-        endpoint += f"?visitId={visit_id}"
-
-    url = BASE_URL + endpoint
-
-    # Headers match WORKING_GATE_OPENER.py exactly
-    headers = {
-        "Authorization": f"Bearer {AUTH_KEY}",
-        "Accept": "*/*",
-        "Content-Type": "application/json",
-        "Origin": "https://specialist.metropolis.io",
-        "Referer": "https://specialist.metropolis.io/",
-        "User-Agent": "Mozilla/5.0"
-    }
-
-    try:
-        logger.info(f"Opening gate: POST {endpoint}")
-        response = requests.post(url, headers=headers, timeout=10)
-        logger.info(f"Status: {response.status_code}")
-
-        # Accept 200, 201, or 204 as success (matches working script)
-        if response.status_code in [200, 201, 204]:
-            try:
-                response_data = response.json()
-                logger.info(f"Response: {response_data}")
-            except:
-                # No JSON response, but success status
-                pass
-            return jsonify({'success': True, 'message': f'{gate_name} opened successfully'})
-        else:
-            logger.error(f"Error response: {response.text}")
-            return jsonify({'success': False, 'message': f'Failed with status {response.status_code}'})
-    except Exception as e:
-        logger.error(f"Error opening gate: {e}")
-        return jsonify({'success': False, 'message': str(e)})
-
-@app.route('/api/occupancy/<site_id>')
-@login_required
-def api_occupancy(site_id):
-    url = f"{BASE_URL}/api/site/{site_id}/occupancy"
-    headers = {"Authorization": f"Bearer {AUTH_KEY}", "Accept": "*/*"}
     
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            occupancy = data.get('currentOccupancy', 0)
-            return jsonify({'html': str(occupancy)})
-    except:
-        pass
-    return jsonify({'html': '--'})
+    result = open_gate(lane_id, gate_name, site_id=site_id)
+    return jsonify({"success": result})
 
-@app.route('/api/waiting-count')
-@login_required
-def api_waiting_count():
-    total = 0
-    for site_id in ["4005", "4007"]:
-        url = f"{BASE_URL}/api/specialist/site/{site_id}/event/hanging-exit/count"
-        headers = {"Authorization": f"Bearer {AUTH_KEY}", "Accept": "*/*"}
-        try:
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                total += data.get('count', 0)
-        except:
-            pass
-    return jsonify({'html': str(total)})
+@app.route('/api/open_all_gates', methods=['POST'])
+def api_open_all_gates():
+    gates = [
+        ("5568", "6th Street Exit", "4005"),
+        ("5569", "L Street Exit", "4005"),
+        ("5565", "Bank of America Exit", "4007"),
+    ]
+    for lane_id, name, site in gates:
+        open_gate(lane_id, name, site_id=site)
+    return jsonify({"success": True})
 
-@app.route('/api/recent-transactions')
-@login_required  
-def api_recent_transactions():
-    html = '<div class="table-responsive"><table class="table table-sm">'
-    html += '<thead><tr><th>Time</th><th>Plate</th><th>Site</th></tr></thead><tbody>'
-    
-    for site_id in ["4005", "4007"]:
-        site_name = "555" if site_id == "4005" else "BoA"
-        url = f"{BASE_URL}/api/specialist/site/{site_id}/visits/closed?count=5"
-        headers = {"Authorization": f"Bearer {AUTH_KEY}", "Accept": "*/*"}
-        
-        try:
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('success'):
-                    transactions = data.get('data', {}).get('transactions', [])
-                    for t in transactions[:5]:
-                        vehicle = t.get('vehicle', {})
-                        plate = vehicle.get('licensePlate', {}).get('text', 'Unknown') if vehicle else 'Unknown'
-                        entry_time = t.get('entryTimestamp', '')
-                        if entry_time:
-                            entry_time = entry_time.split('T')[1][:5]
-                        html += f'<tr><td>{entry_time}</td><td><strong>{plate}</strong></td><td>{site_name}</td></tr>'
-        except:
-            pass
-    
-    html += '</tbody></table></div>'
-    return jsonify({'html': html})
+@app.route('/api/members')
+def api_members():
+    return jsonify({"members": member_plates})
 
 @app.route('/api/members/add', methods=['POST'])
-@login_required
 def api_add_member():
-    plate = request.json.get('plate', '').upper()
+    plate = request.json.get('plate', '').strip().upper()
     if plate and plate not in member_plates:
         member_plates.append(plate)
-        save_members()  # Save to file
-        logger.info(f"Added member: {plate}")
-        return jsonify({'success': True, 'message': f'Added {plate} to members'})
-    return jsonify({'success': False, 'message': 'Plate already exists or invalid'})
+        save_members()
+        return jsonify({"success": True})
+    return jsonify({"success": False})
 
 @app.route('/api/members/remove', methods=['POST'])
-@login_required
 def api_remove_member():
-    plate = request.json.get('plate', '').upper()
+    plate = request.json.get('plate', '').strip().upper()
     if plate in member_plates:
         member_plates.remove(plate)
-        save_members()  # Save to file
-        logger.info(f"Removed member: {plate}")
-        return jsonify({'success': True, 'message': f'Removed {plate}'})
-    return jsonify({'success': False, 'message': 'Plate not found'})
+        save_members()
+        return jsonify({"success": True})
+    return jsonify({"success": False})
+
+@app.route('/api/blacklist')
+def api_blacklist():
+    return jsonify({"blacklist": blacklist_plates})
 
 @app.route('/api/blacklist/add', methods=['POST'])
-@login_required
 def api_add_blacklist():
-    plate = request.json.get('plate', '').upper()
+    plate = request.json.get('plate', '').strip().upper()
     if plate and plate not in blacklist_plates:
         blacklist_plates.append(plate)
-        save_blacklist()  # Save to file
-        logger.warning(f"Blacklisted plate: {plate}")
-        return jsonify({'success': True, 'message': f'Blacklisted {plate}'})
-    return jsonify({'success': False, 'message': 'Plate already blacklisted or invalid'})
+        save_blacklist()
+        return jsonify({"success": True})
+    return jsonify({"success": False})
 
 @app.route('/api/blacklist/remove', methods=['POST'])
-@login_required
 def api_remove_blacklist():
-    plate = request.json.get('plate', '').upper()
+    plate = request.json.get('plate', '').strip().upper()
     if plate in blacklist_plates:
         blacklist_plates.remove(plate)
-        save_blacklist()  # Save to file
-        logger.info(f"Removed from blacklist: {plate}")
-        return jsonify({'success': True, 'message': f'Removed {plate} from blacklist'})
-    return jsonify({'success': False, 'message': 'Plate not found'})
+        save_blacklist()
+        return jsonify({"success": True})
+    return jsonify({"success": False})
 
-@app.route('/api/visitor-pass', methods=['POST'])
-@login_required
-def api_visitor_pass():
-    data = request.json
-    plate = data.get('plate', '').upper()
-    hours = int(data.get('hours', 4))
-    site_id = data.get('site_id', '4005')
+@app.route('/api/monitoring/toggle', methods=['POST'])
+def api_toggle_monitoring():
+    global monitoring_active, monitoring_thread
     
-    valid_until = datetime.now() + timedelta(hours=hours)
-    site_name = "555 Capitol Mall" if site_id == "4005" else "Bank of America"
-    
-    # In a real app, you would save this to a database
-    return jsonify({
-        'success': True,
-        'plate': plate,
-        'valid_until': valid_until.strftime('%Y-%m-%d %H:%M'),
-        'site': site_name
-    })
-
-@app.route('/api/camera-feeds-live')
-@login_required
-def api_camera_feeds_live():
-    """Get live camera feeds with actual vehicle images - matches WORKING_GATE_OPENER.py"""
-    html = ''
-
-    for site_id in ['4005', '4007']:
-        site_name = "555 Capitol Mall" if site_id == "4005" else "Bank of America"
-
-        url = f"{BASE_URL}/api/specialist/site/{site_id}/visits/closed?count=10"
-        headers = {"Authorization": f"Bearer {AUTH_KEY}", "Accept": "*/*"}
-
-        try:
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                api_data = response.json()
-                if api_data.get('success'):
-                    transactions = api_data.get('data', {}).get('transactions', [])
-
-                    for t in transactions[:10]:  # Show latest 10
-                        vehicle = t.get('vehicle', {})
-                        plate_obj = vehicle.get('licensePlate', {})
-                        plate = plate_obj.get('text', 'N/A')
-                        state = plate_obj.get('state', {}).get('name', 'CA')
-
-                        images = t.get('images', {})
-
-                        # Show EXIT events (most recent activity)
-                        exit_event = images.get('exitEvent')
-                        if exit_event:
-                            html += create_vehicle_card_html(t, exit_event, plate, state, is_entry=False)
-
-                        # Also show ENTRY events
-                        entry_event = images.get('entryEvent')
-                        if entry_event:
-                            html += create_vehicle_card_html(t, entry_event, plate, state, is_entry=True)
-
-        except Exception as e:
-            logger.error(f"Error fetching camera feeds: {e}")
-
-    if not html:
-        html = '<div class="alert alert-info text-center">No recent camera activity</div>'
-
-    return jsonify({'html': html})
-
-@app.route('/api/recent-activity', methods=['POST'])
-@login_required
-def api_recent_activity():
-    """Get recent vehicle activity with images - matches WORKING_GATE_OPENER.py layout"""
-    data = request.json
-    filter_plate = data.get('plate', '').upper()
-    filter_site = data.get('site', 'all')
-    filter_type = data.get('type', 'all')
-
-    html = ''
-    sites = ['4005', '4007'] if filter_site == 'all' else [filter_site]
-
-    for site_id in sites:
-        site_name = "555 Capitol Mall" if site_id == "4005" else "Bank of America"
-
-        # Header for site
-        html += f'''
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    color: white; padding: 10px 20px; margin: 20px 0 10px 0;
-                    border-radius: 10px; font-weight: bold; font-size: 1.1rem;">
-            {site_name}
-        </div>
-        '''
-
-        url = f"{BASE_URL}/api/specialist/site/{site_id}/visits/closed?count=20"
-        headers = {"Authorization": f"Bearer {AUTH_KEY}", "Accept": "*/*"}
-
-        try:
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                api_data = response.json()
-                if api_data.get('success'):
-                    transactions = api_data.get('data', {}).get('transactions', [])
-
-                    for t in transactions:
-                        vehicle = t.get('vehicle', {})
-                        plate_obj = vehicle.get('licensePlate', {})
-                        plate = plate_obj.get('text', 'N/A')
-                        state = plate_obj.get('state', {}).get('name', 'CA')
-
-                        # Filter by plate if specified
-                        if filter_plate and filter_plate not in plate.upper():
-                            continue
-
-                        images = t.get('images', {})
-
-                        # Process ENTRY event
-                        if filter_type in ['all', 'entry']:
-                            entry_event = images.get('entryEvent')
-                            if entry_event:
-                                html += create_vehicle_card_html(t, entry_event, plate, state, is_entry=True)
-
-                        # Process EXIT event
-                        if filter_type in ['all', 'exit']:
-                            exit_event = images.get('exitEvent')
-                            if exit_event:
-                                html += create_vehicle_card_html(t, exit_event, plate, state, is_entry=False)
-
-        except Exception as e:
-            logger.error(f"Error fetching activity: {e}")
-
-    if not html:
-        html = '<div class="alert alert-info text-center">No recent activity found</div>'
-
-    return jsonify({'html': html})
-
-def create_vehicle_card_html(transaction, event, plate, state, is_entry=True):
-    """Create HTML for a vehicle card matching WORKING_GATE_OPENER.py style"""
-
-    # Get timestamp
-    timestamp_ms = transaction.get('start') if is_entry else transaction.get('end')
-    if timestamp_ms:
-        dt = datetime.fromtimestamp(timestamp_ms / 1000)
-        time_str = dt.strftime('%I:%M %p')
-        date_str = dt.strftime('%m/%d/%Y')
+    if not monitoring_active:
+        monitoring_active = True
+        monitoring_thread = threading.Thread(target=monitor_and_auto_open, daemon=True)
+        monitoring_thread.start()
+        current_status["monitoring"] = "ON"
     else:
-        time_str = 'N/A'
-        date_str = ''
+        monitoring_active = False
+        current_status["monitoring"] = "OFF"
+    
+    return jsonify({"monitoring": monitoring_active})
 
-    # Get lane info
-    equipment = event.get('siteEquipment') if event else None
-    lane_name = equipment.get('notes', 'Unknown Lane') if equipment else 'Unknown Lane'
+@app.route('/api/token_monitor/toggle', methods=['POST'])
+def api_toggle_token_monitor():
+    global token_monitor_active, token_monitor_thread
+    
+    if not token_monitor_active:
+        token_monitor_active = True
+        token_monitor_thread = threading.Thread(target=token_monitor_loop, daemon=True)
+        token_monitor_thread.start()
+        current_status["token_monitor"] = "ON"
+    else:
+        token_monitor_active = False
+        current_status["token_monitor"] = "OFF"
+    
+    return jsonify({"token_monitor": token_monitor_active})
 
-    # Get image URL
-    context_url = event.get('contextImageUrl', '') if event else ''
+@app.route('/api/waiting_cars')
+def api_waiting_cars():
+    results = {}
+    for site_id in ["4005", "4007"]:
+        data = get_hanging_exits(site_id)
+        results[site_id] = data
+    return jsonify(results)
 
-    # Entry/Exit styling
-    direction_color = '#4CAF50' if is_entry else '#F44336'
-    direction_text = '→ ENTRY' if is_entry else '← EXIT'
-    direction_icon = 'fa-arrow-right' if is_entry else 'fa-arrow-left'
+@app.route('/api/visits')
+def api_visits():
+    results = {}
+    for site_id in ["4005", "4007"]:
+        data = get_closed_visits(site_id, count=10)
+        results[site_id] = data
+    return jsonify(results)
 
-    card_html = f'''
-    <div style="background: #2a2a2a; border-radius: 10px; padding: 15px; margin-bottom: 15px;
-                display: flex; align-items: center; box-shadow: 0 5px 15px rgba(0,0,0,0.3);">
+@app.route('/api/occupancy')
+def api_occupancy():
+    results = {}
+    for site_id in ["4005", "4007"]:
+        data = get_occupancy(site_id)
+        results[site_id] = data
+    return jsonify(results)
 
-        <!-- Left: Image -->
-        <div style="flex-shrink: 0; margin-right: 20px;">
-            {f'<img src="{context_url}" style="width: 150px; height: 100px; object-fit: cover; border-radius: 5px; background: #000;" />'
-             if context_url else
-             '<div style="width: 150px; height: 100px; background: #000; border-radius: 5px; display: flex; align-items: center; justify-content: center; color: #666;"><i class="fas fa-camera" style="font-size: 2rem;"></i></div>'}
-        </div>
+@app.route('/api/member_directory')
+def api_member_directory():
+    results = {}
+    for site_id in ["4005", "4007"]:
+        members = get_all_members(site_id)
+        results[site_id] = members
+    return jsonify(results)
 
-        <!-- Middle: Info -->
-        <div style="flex-grow: 1;">
-            <!-- License Plate Badge -->
-            <div style="display: inline-block; background: #1E88E5; padding: 5px 15px; border-radius: 5px; margin-bottom: 8px;">
-                <span style="color: white; font-weight: bold; font-size: 1.2rem; margin-right: 10px;">{plate}</span>
-                <span style="background: white; color: black; padding: 2px 8px; border-radius: 3px; font-size: 0.9rem; font-weight: bold;">{state}</span>
-            </div>
+@app.route('/api/refresh_token', methods=['POST'])
+def api_refresh_token():
+    new_token = refresh_token_headless()
+    return jsonify({"success": new_token is not None})
 
-            <!-- Entry/Exit Indicator -->
-            <div style="color: {direction_color}; font-weight: bold; margin-bottom: 3px;">
-                <i class="fas {direction_icon}"></i> {direction_text}
-            </div>
+HTML_TEMPLATE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Metropolis Parking Management</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: Arial, sans-serif; 
+            background: #1a1a1a; 
+            color: white; 
+            padding: 20px;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 10px;
+        }
+        .header h1 { font-size: 28px; margin-bottom: 10px; }
+        .status-bar {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #2a2a2a;
+            border-radius: 10px;
+        }
+        .status-item {
+            padding: 10px 15px;
+            background: #3a3a3a;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .tab {
+            padding: 12px 20px;
+            background: #2a2a2a;
+            border: none;
+            color: white;
+            cursor: pointer;
+            border-radius: 5px;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+        .tab:hover { background: #3a3a3a; }
+        .tab.active { background: #1E88E5; }
+        .tab-content {
+            display: none;
+            padding: 20px;
+            background: #2a2a2a;
+            border-radius: 10px;
+        }
+        .tab-content.active { display: block; }
+        .btn {
+            padding: 12px 24px;
+            margin: 5px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            transition: transform 0.2s;
+        }
+        .btn:hover { transform: scale(1.05); }
+        .btn-primary { background: #1E88E5; color: white; }
+        .btn-success { background: #4CAF50; color: white; }
+        .btn-danger { background: #F44336; color: white; }
+        .btn-warning { background: #FFA726; color: white; }
+        .gate-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .gate-btn {
+            padding: 20px;
+            background: #1E88E5;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .gate-btn:hover {
+            background: #1976D2;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(30,136,229,0.4);
+        }
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin: 15px 0;
+            align-items: center;
+        }
+        input[type="text"] {
+            padding: 10px;
+            border: 2px solid #3a3a3a;
+            background: #1a1a1a;
+            color: white;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        .list-box {
+            background: #1a1a1a;
+            border: 2px solid #3a3a3a;
+            border-radius: 5px;
+            padding: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+            margin: 15px 0;
+        }
+        .list-item {
+            padding: 10px;
+            margin: 5px 0;
+            background: #2a2a2a;
+            border-radius: 5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .data-display {
+            background: #1a1a1a;
+            border: 2px solid #3a3a3a;
+            border-radius: 5px;
+            padding: 15px;
+            max-height: 500px;
+            overflow-y: auto;
+            margin: 15px 0;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
+        .alert {
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .alert-success { background: #4CAF50; }
+        .alert-danger { background: #F44336; }
+        .alert-warning { background: #FFA726; }
+        .card {
+            background: #3a3a3a;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 15px 0;
+        }
+        @media (max-width: 768px) {
+            .gate-grid { grid-template-columns: 1fr; }
+            .tabs { flex-direction: column; }
+            .status-bar { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🚗 Metropolis Parking Management</h1>
+        <p>Real-time Gate Control & Monitoring System</p>
+    </div>
 
-            <!-- Lane Name -->
-            <div style="color: #aaa; font-size: 0.9rem;">{lane_name}</div>
-        </div>
+    <div class="status-bar" id="statusBar">
+        <div class="status-item">⏰ Loading...</div>
+    </div>
 
-        <!-- Right: Time -->
-        <div style="text-align: right; min-width: 120px;">
-            <div style="font-size: 1.3rem; font-weight: bold; color: white;">{time_str}</div>
-            <div style="font-size: 0.8rem; color: #888;">{date_str}</div>
+    <div class="tabs">
+        <button class="tab active" onclick="showTab('gates')">Gate Controls</button>
+        <button class="tab" onclick="showTab('monitoring')">Auto-Monitoring</button>
+        <button class="tab" onclick="showTab('members')">Members</button>
+        <button class="tab" onclick="showTab('blacklist')">Blacklist</button>
+        <button class="tab" onclick="showTab('token')">Token</button>
+        <button class="tab" onclick="showTab('waiting')">Waiting Cars</button>
+        <button class="tab" onclick="showTab('visits')">Recent Visits</button>
+        <button class="tab" onclick="showTab('occupancy')">Occupancy</button>
+        <button class="tab" onclick="showTab('directory')">Directory</button>
+        <button class="tab" onclick="showTab('emergency')">Emergency</button>
+    </div>
+
+    <div id="gates" class="tab-content active">
+        <h2>🚧 Gate Controls</h2>
+        <div class="gate-grid">
+            <button class="gate-btn" onclick="openGate('5568', '6th Street Exit', '4005')">
+                Open 6th Street Exit<br><small>(Site 4005)</small>
+            </button>
+            <button class="gate-btn" onclick="openGate('5569', 'L Street Exit', '4005')">
+                Open L Street Exit<br><small>(Site 4005)</small>
+            </button>
+            <button class="gate-btn" onclick="openGate('5565', 'Bank of America Exit', '4007')">
+                Open Bank of America Exit<br><small>(Site 4007)</small>
+            </button>
         </div>
     </div>
-    '''
 
-    return card_html
+    <div id="monitoring" class="tab-content">
+        <h2>🤖 Auto-Monitoring System</h2>
+        <div class="card">
+            <p style="margin-bottom: 15px;">Automatically detects member vehicles and opens gates. Blocks blacklisted vehicles.</p>
+            <button class="btn btn-success" onclick="toggleMonitoring()">Toggle Monitoring</button>
+            <div id="monitoringStatus" style="margin-top: 15px; font-size: 16px;"></div>
+        </div>
+    </div>
 
-@app.route('/api/search-transactions', methods=['POST'])
-@login_required
-def api_search_transactions():
-    data = request.json
-    plate = data.get('plate', '').upper()
-    site = data.get('site', 'all')
-    
-    html = '<div class="table-responsive"><table class="table">'
-    html += '<thead><tr><th>Time</th><th>Plate</th><th>Duration</th><th>Site</th><th>Amount</th></tr></thead><tbody>'
-    
-    sites = ['4005', '4007'] if site == 'all' else [site]
-    
-    for site_id in sites:
-        site_name = "555 Capitol" if site_id == "4005" else "Bank of America"
-        url = f"{BASE_URL}/api/specialist/site/{site_id}/visits/closed?count=50"
-        headers = {"Authorization": f"Bearer {AUTH_KEY}", "Accept": "*/*"}
-        
-        try:
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('success'):
-                    transactions = data.get('data', {}).get('transactions', [])
-                    for t in transactions:
-                        vehicle = t.get('vehicle', {})
-                        t_plate = vehicle.get('licensePlate', {}).get('text', '') if vehicle else ''
-                        
-                        if plate and plate not in t_plate.upper():
-                            continue
-                        
-                        entry_time = t.get('entryTimestamp', '')
-                        exit_time = t.get('exitTimestamp', '')
-                        amount = t.get('paymentDue', 0)
-                        
-                        if entry_time:
-                            entry_time = entry_time.replace('T', ' ')[:16]
-                        
-                        duration = 'N/A'
-                        if entry_time and exit_time:
-                            try:
-                                entry_dt = datetime.fromisoformat(t.get('entryTimestamp', '').replace('Z', '+00:00'))
-                                exit_dt = datetime.fromisoformat(t.get('exitTimestamp', '').replace('Z', '+00:00'))
-                                duration_td = exit_dt - entry_dt
-                                hours = duration_td.seconds // 3600
-                                minutes = (duration_td.seconds % 3600) // 60
-                                duration = f'{hours}h {minutes}m'
-                            except:
-                                pass
-                        
-                        html += f'''
-                        <tr>
-                            <td>{entry_time}</td>
-                            <td><strong>{t_plate}</strong></td>
-                            <td>{duration}</td>
-                            <td>{site_name}</td>
-                            <td>${amount:.2f}</td>
-                        </tr>
-                        '''
-        except Exception as e:
-            print(f"Error searching transactions: {e}")
-    
-    html += '</tbody></table></div>'
-    return jsonify({'html': html})
+    <div id="members" class="tab-content">
+        <h2>👥 Member Management</h2>
+        <div class="input-group">
+            <label>License Plate:</label>
+            <input type="text" id="memberPlate" placeholder="ABC123">
+            <button class="btn btn-success" onclick="addMember()">Add Member</button>
+        </div>
+        <div class="list-box" id="membersList"></div>
+    </div>
 
-@app.route('/api/test-token')
-@login_required
-def api_test_token():
-    """Test if the current token is valid"""
-    is_valid = verify_token()
-    return jsonify({
-        'valid': is_valid,
-        'error': token_status.get('error'),
-        'last_check': token_status.get('last_check').isoformat() if isinstance(token_status.get('last_check'), datetime) else None
-    })
+    <div id="blacklist" class="tab-content">
+        <h2>🚫 Blacklist Management</h2>
+        <div class="alert alert-danger">
+            ⚠️ Blacklisted vehicles will be BLOCKED even if they're members
+        </div>
+        <div class="input-group">
+            <label>License Plate:</label>
+            <input type="text" id="blacklistPlate" placeholder="ABC123">
+            <button class="btn btn-danger" onclick="addToBlacklist()">Add to Blacklist</button>
+        </div>
+        <div class="list-box" id="blacklistList"></div>
+    </div>
 
-@app.route('/api/refresh-token', methods=['POST'])
-@login_required
-def api_refresh_token():
-    """Manually trigger token refresh"""
-    if not HAS_SELENIUM:
-        return jsonify({
-            'success': False,
-            'error': 'Selenium not installed. Please install selenium to enable token refresh.'
-        })
-    
-    try:
-        success = refresh_token_if_needed()
-        return jsonify({
-            'success': success,
-            'error': token_status.get('error') if not success else None
-        })
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        })
+    <div id="token" class="tab-content">
+        <h2>🔐 Token Management</h2>
+        <div class="card">
+            <div id="tokenInfo"></div>
+            <button class="btn btn-primary" onclick="refreshToken()" style="margin-top: 15px;">🔄 Refresh Token Now</button>
+            <button class="btn btn-success" onclick="toggleTokenMonitor()" style="margin-top: 15px;">Toggle Auto-Monitor</button>
+            <div id="tokenMonitorStatus" style="margin-top: 15px;"></div>
+        </div>
+    </div>
 
-@app.route('/api/token-status')
-@login_required
-def api_token_status():
-    """Get current token status"""
-    last_check = token_status.get('last_check')
-    last_refresh = token_status.get('last_refresh')
+    <div id="waiting" class="tab-content">
+        <h2>🚗 Cars Waiting at Exit</h2>
+        <button class="btn btn-primary" onclick="loadWaitingCars()">Refresh</button>
+        <div class="data-display" id="waitingData">Click Refresh to load data...</div>
+    </div>
 
-    return jsonify({
-        'valid': token_status.get('valid', False),
-        'last_check': last_check.strftime('%Y-%m-%d %H:%M:%S') if isinstance(last_check, datetime) else 'Never',
-        'last_refresh': last_refresh.strftime('%Y-%m-%d %H:%M:%S') if isinstance(last_refresh, datetime) else 'Never',
-        'error': token_status.get('error'),
-        'auto_refresh_enabled': AUTO_TOKEN_REFRESH and HAS_SELENIUM,
-        'selenium_available': HAS_SELENIUM
-    })
+    <div id="visits" class="tab-content">
+        <h2>📋 Recent Visits</h2>
+        <button class="btn btn-primary" onclick="loadVisits()">Refresh</button>
+        <div class="data-display" id="visitsData">Click Refresh to load data...</div>
+    </div>
 
-@app.route('/api/member-directory')
-@login_required
-def api_member_directory():
-    """Get all members with active subscriptions - matches WORKING_GATE_OPENER.py"""
+    <div id="occupancy" class="tab-content">
+        <h2>📊 Garage Occupancy</h2>
+        <button class="btn btn-primary" onclick="loadOccupancy()">Refresh</button>
+        <div class="data-display" id="occupancyData">Click Refresh to load data...</div>
+    </div>
 
-    def get_all_members(site_id):
-        """Get all members/users with active visits or subscriptions"""
-        url = f"{BASE_URL}/api/specialist/site/{site_id}/visits/closed?count=100&minPaymentDueAgeSeconds=0&zoneIds={site_id}"
-        headers = {
-            "Authorization": f"Bearer {AUTH_KEY}",
-            "Accept": "*/*",
+    <div id="directory" class="tab-content">
+        <h2>📖 Member Directory</h2>
+        <button class="btn btn-primary" onclick="loadDirectory()">Refresh</button>
+        <div class="data-display" id="directoryData">Click Refresh to load data...</div>
+    </div>
+
+    <div id="emergency" class="tab-content">
+        <h2>🚨 Emergency Controls</h2>
+        <div class="alert alert-danger">
+            ⚠️ WARNING: This will open ALL gates at ALL sites simultaneously
+        </div>
+        <button class="btn btn-danger" onclick="openAllGates()" style="width: 100%; padding: 30px; font-size: 20px; margin: 20px 0;">
+            🚨 OPEN ALL GATES 🚨
+        </button>
+    </div>
+
+    <script>
+        function showTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.getElementById(tabName).classList.add('active');
+            event.target.classList.add('active');
         }
-        try:
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('success') and data.get('data'):
-                    transactions = data['data'].get('transactions', [])
-                    # Filter for members only
-                    members = []
-                    seen_users = set()
-                    for t in transactions:
-                        user = t.get('user', {})
-                        if user.get('isMember') and user.get('phoneNumber') not in seen_users:
-                            member_info = {
-                                'user': user,
-                                'vehicle': t.get('vehicle', {}),
-                                'hasSubscription': user.get('hasSubscription', False),
-                                'lastVisit': t.get('end'),
-                                'coveredBySubscription': t.get('coveredBySubscription', False)
-                            }
-                            members.append(member_info)
-                            seen_users.add(user.get('phoneNumber'))
-                    return members
-        except Exception as e:
-            logger.error(f"Error getting members: {e}")
-        return []
 
-    html = ''
+        async function updateStatus() {
+            const res = await fetch('/api/status');
+            const data = await res.json();
+            document.getElementById('statusBar').innerHTML = `
+                <div class="status-item">🤖 Monitoring: ${data.monitoring}</div>
+                <div class="status-item">🔐 Token: ${data.token_monitor}</div>
+                <div class="status-item">⏰ Token Status: ${data.token_status}</div>
+                <div class="status-item">👥 Members: ${data.members_count}</div>
+                <div class="status-item">🚫 Blacklist: ${data.blacklist_count}</div>
+                <div class="status-item">📝 ${data.last_action}</div>
+            `;
+        }
 
-    for site_id in ["4005", "4007"]:
-        site_name = "555 Capitol Mall" if site_id == "4005" else "Bank of America"
-        members = get_all_members(site_id)
+        async function openGate(laneId, gateName, siteId) {
+            const res = await fetch('/api/open_gate', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({lane_id: laneId, gate_name: gateName, site_id: siteId})
+            });
+            const data = await res.json();
+            alert(data.success ? `${gateName} opened!` : 'Failed to open gate');
+            updateStatus();
+        }
 
-        if members:
-            html += f'''
-            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                        color: white; padding: 15px 20px; margin: 20px 0 15px 0;
-                        border-radius: 10px; font-weight: bold; font-size: 1.2rem;">
-                <i class="fas fa-building"></i> {site_name} - {len(members)} Members
-            </div>
-            '''
+        async function openAllGates() {
+            if (!confirm('Open ALL gates at BOTH sites?')) return;
+            await fetch('/api/open_all_gates', {method: 'POST'});
+            alert('All gates opened!');
+            updateStatus();
+        }
 
-            for idx, member in enumerate(members, 1):
-                user = member['user']
-                vehicle = member['vehicle']
+        async function toggleMonitoring() {
+            const res = await fetch('/api/monitoring/toggle', {method: 'POST'});
+            const data = await res.json();
+            document.getElementById('monitoringStatus').innerHTML = 
+                `Status: <strong>${data.monitoring ? 'ON ✅' : 'OFF ❌'}</strong>`;
+            updateStatus();
+        }
 
-                # User info
-                name = f"{user.get('firstName', '')} {user.get('lastName', '')}".strip()
-                phone = user.get('phoneNumber', 'N/A')
-                has_sub = "✅ YES" if member['hasSubscription'] else "❌ NO"
+        async function toggleTokenMonitor() {
+            const res = await fetch('/api/token_monitor/toggle', {method: 'POST'});
+            const data = await res.json();
+            document.getElementById('tokenMonitorStatus').innerHTML = 
+                `Auto-Monitor: <strong>${data.token_monitor ? 'ON ✅' : 'OFF ❌'}</strong>`;
+            updateStatus();
+        }
 
-                # Vehicle info
-                plate_obj = vehicle.get('licensePlate', {})
-                plate = plate_obj.get('text', 'N/A')
-                state = plate_obj.get('state', {}).get('name', '')
-
-                make_obj = vehicle.get('make', {})
-                make = make_obj.get('name', 'Unknown') if make_obj else 'Unknown'
-
-                model_obj = vehicle.get('model', {})
-                model = model_obj.get('name', 'Unknown') if model_obj else 'Unknown'
-
-                color = vehicle.get('color', 'Unknown')
-
-                # Last visit time
-                last_visit_ms = member.get('lastVisit')
-                if last_visit_ms:
-                    last_visit = datetime.fromtimestamp(last_visit_ms / 1000).strftime('%Y-%m-%d %H:%M')
-                else:
-                    last_visit = 'N/A'
-
-                html += f'''
-                <div class="dashboard-card" style="margin-bottom: 15px;">
-                    <div class="row">
-                        <div class="col-md-6">
-                            <h5 style="color: #667eea;"><i class="fas fa-user"></i> {name}</h5>
-                            <p class="mb-1"><strong>Phone:</strong> {phone}</p>
-                            <p class="mb-1"><strong>Subscription:</strong> {has_sub}</p>
-                            <p class="mb-1"><strong>Last Visit:</strong> {last_visit}</p>
-                        </div>
-                        <div class="col-md-6">
-                            <h5 style="color: #764ba2;"><i class="fas fa-car"></i> Vehicle</h5>
-                            <p class="mb-1"><strong>Plate:</strong>
-                                <span style="background: #1E88E5; color: white; padding: 3px 10px; border-radius: 5px; font-weight: bold;">
-                                    {plate}
-                                </span>
-                                <span style="background: white; color: black; border: 1px solid #ccc; padding: 3px 8px; border-radius: 3px; font-weight: bold; margin-left: 5px;">
-                                    {state}
-                                </span>
-                            </p>
-                            <p class="mb-1"><strong>Vehicle:</strong> {color} {make} {model}</p>
-                        </div>
-                    </div>
+        async function loadMembers() {
+            const res = await fetch('/api/members');
+            const data = await res.json();
+            const html = data.members.map(p => `
+                <div class="list-item">
+                    <span>${p}</span>
+                    <button class="btn btn-danger" onclick="removeMember('${p}')">Remove</button>
                 </div>
-                '''
+            `).join('');
+            document.getElementById('membersList').innerHTML = html || '<p>No members</p>';
+        }
 
-    if not html:
-        html = '<div class="alert alert-info">No members found</div>'
+        async function addMember() {
+            const plate = document.getElementById('memberPlate').value.trim().toUpperCase();
+            if (!plate) return alert('Enter a plate');
+            await fetch('/api/members/add', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({plate})
+            });
+            document.getElementById('memberPlate').value = '';
+            loadMembers();
+            updateStatus();
+        }
 
-    return jsonify({'html': html})
+        async function removeMember(plate) {
+            await fetch('/api/members/remove', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({plate})
+            });
+            loadMembers();
+            updateStatus();
+        }
 
-@app.route('/api/monitoring-status')
-@login_required
-def api_monitoring_status():
-    """Get status of all background monitors"""
-    return jsonify({
-        'token_monitor': monitoring_active,
-        'member_monitor': member_monitoring_active,
-        'selenium_available': HAS_SELENIUM,
-        'member_count': len(member_plates),
-        'blacklist_count': len(blacklist_plates),
-        'last_activity': datetime.fromtimestamp(last_activity).isoformat()
-    })
+        async function loadBlacklist() {
+            const res = await fetch('/api/blacklist');
+            const data = await res.json();
+            const html = data.blacklist.map(p => `
+                <div class="list-item" style="background: #4a2a2a;">
+                    <span style="color: #F44336; font-weight: bold;">${p}</span>
+                    <button class="btn btn-success" onclick="removeFromBlacklist('${p}')">Remove</button>
+                </div>
+            `).join('');
+            document.getElementById('blacklistList').innerHTML = html || '<p>No blacklisted plates</p>';
+        }
 
-@app.route('/api/toggle-member-monitoring', methods=['POST'])
-@login_required
-def api_toggle_member_monitoring():
-    """Toggle member auto-gate monitoring"""
-    global member_monitoring_active
+        async function addToBlacklist() {
+            const plate = document.getElementById('blacklistPlate').value.trim().toUpperCase();
+            if (!plate) return alert('Enter a plate');
+            if (!confirm(`Add ${plate} to blacklist? This vehicle will be auto-denied!`)) return;
+            await fetch('/api/blacklist/add', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({plate})
+            });
+            document.getElementById('blacklistPlate').value = '';
+            loadBlacklist();
+            updateStatus();
+        }
 
-    if member_monitoring_active:
-        stop_member_monitoring()
-        return jsonify({'success': True, 'status': 'stopped'})
-    else:
-        start_member_monitoring()
-        return jsonify({'success': True, 'status': 'started'})
+        async function removeFromBlacklist(plate) {
+            await fetch('/api/blacklist/remove', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({plate})
+            });
+            loadBlacklist();
+            updateStatus();
+        }
+
+        async function refreshToken() {
+            if (!confirm('Manually refresh token? This may take 30 seconds.')) return;
+            document.getElementById('tokenInfo').innerHTML = '🔄 Refreshing token... Please wait...';
+            const res = await fetch('/api/refresh_token', {method: 'POST'});
+            const data = await res.json();
+            alert(data.success ? 'Token refreshed!' : 'Failed to refresh token');
+            updateStatus();
+        }
+
+        async function loadWaitingCars() {
+            document.getElementById('waitingData').innerHTML = 'Loading...';
+            const res = await fetch('/api/waiting_cars');
+            const data = await res.json();
+            document.getElementById('waitingData').innerHTML = JSON.stringify(data, null, 2);
+        }
+
+        async function loadVisits() {
+            document.getElementById('visitsData').innerHTML = 'Loading...';
+            const res = await fetch('/api/visits');
+            const data = await res.json();
+            document.getElementById('visitsData').innerHTML = JSON.stringify(data, null, 2);
+        }
+
+        async function loadOccupancy() {
+            document.getElementById('occupancyData').innerHTML = 'Loading...';
+            const res = await fetch('/api/occupancy');
+            const data = await res.json();
+            document.getElementById('occupancyData').innerHTML = JSON.stringify(data, null, 2);
+        }
+
+        async function loadDirectory() {
+            document.getElementById('directoryData').innerHTML = 'Loading...';
+            const res = await fetch('/api/member_directory');
+            const data = await res.json();
+            let output = '';
+            for (const [siteId, members] of Object.entries(data)) {
+                const siteName = siteId === '4005' ? '555 Capitol Mall' : 'Bank of America';
+                output += `\n${'='.repeat(80)}\n${siteName} (Site ${siteId}) - ${members.length} Members\n${'='.repeat(80)}\n\n`;
+                members.forEach((m, i) => {
+                    const user = m.user;
+                    const vehicle = m.vehicle;
+                    const plate = vehicle.licensePlate?.text || 'N/A';
+                    const state = vehicle.licensePlate?.state?.name || '';
+                    const make = vehicle.make?.name || 'Unknown';
+                    const model = vehicle.model?.name || 'Unknown';
+                    const color = vehicle.color || 'Unknown';
+                    const name = `${user.firstName || ''} ${user.lastName || ''}`.trim();
+                    output += `[${i+1}] ${name}\n    Phone: ${user.phoneNumber || 'N/A'}\n    Vehicle: ${color} ${make} ${model}\n    Plate: ${plate} (${state})\n\n`;
+                });
+            }
+            document.getElementById('directoryData').innerHTML = output || 'No members found';
+        }
+
+        // Auto-update status every 5 seconds
+        setInterval(updateStatus, 5000);
+        
+        // Initial load
+        updateStatus();
+        loadMembers();
+        loadBlacklist();
+    </script>
+</body>
+</html>
+'''
+
+def auto_start_services():
+    """Automatically start monitoring and token refresh on startup"""
+    global monitoring_active, monitoring_thread, token_monitor_active, token_monitor_thread
+    
+    print("\n" + "="*80)
+    print("🚀 AUTO-STARTING BACKGROUND SERVICES")
+    print("="*80)
+    
+    # Start member/blacklist monitoring
+    if not monitoring_active:
+        monitoring_active = True
+        monitoring_thread = threading.Thread(target=monitor_and_auto_open, daemon=True)
+        monitoring_thread.start()
+        print("✅ Member/Blacklist monitoring started")
+        current_status["monitoring"] = "ON"
+    
+    # Start token monitoring
+    if not token_monitor_active and HAS_SELENIUM:
+        token_monitor_active = True
+        token_monitor_thread = threading.Thread(target=token_monitor_loop, daemon=True)
+        token_monitor_thread.start()
+        print("✅ Token auto-refresh monitoring started")
+        current_status["token_monitor"] = "ON"
+    elif not HAS_SELENIUM:
+        print("⚠️  Selenium not available - token auto-refresh disabled")
+    
+    print("="*80)
+    print("✅ ALL SERVICES RUNNING")
+    print("="*80 + "\n")
 
 if __name__ == '__main__':
-    logger.info("="*60)
-    logger.info("METROPOLIS PARKING MANAGEMENT SYSTEM - WEB APP")
-    logger.info("="*60)
-
-    # Load members and blacklist from files
-    logger.info("📁 Loading member and blacklist data...")
+    print("\n" + "="*80)
+    print("METROPOLIS PARKING MANAGEMENT SYSTEM - WEB VERSION")
+    print("="*80)
+    print(f"Auth Key: {AUTH_KEY[:50]}...")
+    print(f"Sites: 4005 (555 Capitol Mall), 4007 (Bank of America)")
+    print("="*80 + "\n")
+    
+    # Load data
     load_members()
     load_blacklist()
-    logger.info(f"✅ Loaded {len(member_plates)} members and {len(blacklist_plates)} blacklisted plates")
-
-    # Try to load token from file if it exists
-    try:
-        with open('auth_token.txt', 'r') as f:
-            saved_token = f.read().strip()
-            if saved_token and len(saved_token) > 100:  # Basic validation
-                AUTH_KEY = saved_token
-                logger.info(f"✅ Loaded token from auth_token.txt (length: {len(saved_token)})")
-            else:
-                logger.warning("⚠️ Token in auth_token.txt appears invalid")
-    except FileNotFoundError:
-        logger.info("ℹ️ No auth_token.txt found, using environment token")
-    except Exception as e:
-        logger.warning(f"⚠️ Could not load token from file: {e}")
-
-    # Verify initial token FIRST (before starting monitors)
-    logger.info("🔍 Verifying initial token...")
-    token_is_valid = False
-    try:
-        token_is_valid = verify_token()
-        if token_is_valid:
-            logger.info("✅ Initial token is VALID")
-        else:
-            logger.warning("⚠️ Initial token is INVALID or EXPIRED")
-    except Exception as e:
-        logger.error(f"❌ Token verification failed: {e}")
-
-    # If token is invalid and auto-refresh is enabled, refresh NOW
-    if not token_is_valid and AUTO_TOKEN_REFRESH:
-        logger.info("🔄 Token is invalid - triggering immediate refresh...")
-        try:
-            if refresh_token_if_needed():
-                logger.info("✅ Token successfully refreshed on startup!")
-            else:
-                logger.error("❌ Failed to refresh token on startup")
-        except Exception as e:
-            logger.error(f"❌ Token refresh error: {e}")
-
-    # Start token monitor if enabled
-    if AUTO_TOKEN_REFRESH:
-        logger.info("🔄 Starting automatic token monitoring (checks every 3 minutes)...")
-        start_token_monitor()
-        # Give the thread a moment to start
-        time.sleep(0.5)
-    else:
-        logger.info("ℹ️ Auto token refresh is disabled")
-
-    # Start member auto-gate monitoring (always enabled by default)
-    logger.info("🚗 Starting member auto-gate monitoring...")
-    start_member_monitoring()
-    # Give the thread a moment to start
-    time.sleep(0.5)
-
-    # Start keep-alive thread
-    logger.info("💓 Starting keep-alive monitor...")
-    keep_alive_thread = threading.Thread(target=keep_alive_loop, daemon=True)
-    keep_alive_thread.start()
-
-    logger.info("="*60)
-    logger.info("🎉 ALL BACKGROUND SERVICES STARTED")
-    logger.info(f"   - Token Monitor: {'✅ ACTIVE' if monitoring_active else '❌ INACTIVE'}")
-    logger.info(f"   - Member Auto-Gate: {'✅ ACTIVE' if member_monitoring_active else '❌ INACTIVE'}")
-    logger.info(f"   - Keep-Alive: ✅ ACTIVE")
-    logger.info(f"   - Initial Token Status: {'✅ VALID' if token_status.get('valid') else '❌ INVALID'}")
-    logger.info("="*60)
-
-    # Start Flask app
+    
+    # Auto-start all services
+    auto_start_services()
+    
+    # Run Flask app
     port = int(os.environ.get('PORT', 10000))
-    logger.info(f"🚀 Starting Flask app on port {port}...")
-    logger.info("="*60)
     app.run(host='0.0.0.0', port=port, debug=False)
