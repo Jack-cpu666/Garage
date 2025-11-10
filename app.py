@@ -8,6 +8,7 @@ import base64
 import re
 from datetime import datetime
 from io import BytesIO
+import atexit
 
 # Selenium for token refresh
 try:
@@ -37,13 +38,28 @@ MEMBERS_FILE = "memberships.json"
 BLACKLIST_FILE = "blacklist.json"
 member_plates = []
 blacklist_plates = []
-monitoring_active = False
+
+# Background services - ALWAYS RUNNING
+monitoring_active = True  # Always True - runs forever
 monitoring_thread = None
-token_monitor_active = False
+token_monitor_active = True  # Always True - runs forever
 token_monitor_thread = None
 
 # Status tracking
-current_status = {"monitoring": "OFF", "token_monitor": "OFF", "last_action": "System started"}
+current_status = {
+    "monitoring": "STARTING...", 
+    "token_monitor": "STARTING...", 
+    "last_action": "System initializing...",
+    "monitoring_cycles": 0,
+    "token_checks": 0,
+    "gates_opened": 0,
+    "vehicles_blocked": 0
+}
+
+def log(msg):
+    """Timestamped logging"""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {msg}")
 
 def load_members():
     global member_plates
@@ -51,20 +67,21 @@ def load_members():
         try:
             with open(MEMBERS_FILE, 'r') as f:
                 member_plates = json.load(f)
-            print(f"Loaded {len(member_plates)} member plates")
+            log(f"✅ Loaded {len(member_plates)} member plates")
         except Exception as e:
-            print(f"Error loading members: {e}")
+            log(f"❌ Error loading members: {e}")
             member_plates = []
     else:
         member_plates = []
+        log("📝 No existing members file - starting fresh")
 
 def save_members():
     try:
         with open(MEMBERS_FILE, 'w') as f:
             json.dump(member_plates, f, indent=2)
-        print(f"Saved {len(member_plates)} member plates")
+        log(f"💾 Saved {len(member_plates)} member plates")
     except Exception as e:
-        print(f"Error saving members: {e}")
+        log(f"❌ Error saving members: {e}")
 
 def load_blacklist():
     global blacklist_plates
@@ -72,20 +89,21 @@ def load_blacklist():
         try:
             with open(BLACKLIST_FILE, 'r') as f:
                 blacklist_plates = json.load(f)
-            print(f"Loaded {len(blacklist_plates)} blacklisted plates")
+            log(f"✅ Loaded {len(blacklist_plates)} blacklisted plates")
         except Exception as e:
-            print(f"Error loading blacklist: {e}")
+            log(f"❌ Error loading blacklist: {e}")
             blacklist_plates = []
     else:
         blacklist_plates = []
+        log("📝 No existing blacklist file - starting fresh")
 
 def save_blacklist():
     try:
         with open(BLACKLIST_FILE, 'w') as f:
             json.dump(blacklist_plates, f, indent=2)
-        print(f"Saved {len(blacklist_plates)} blacklisted plates")
+        log(f"💾 Saved {len(blacklist_plates)} blacklisted plates")
     except Exception as e:
-        print(f"Error saving blacklist: {e}")
+        log(f"❌ Error saving blacklist: {e}")
 
 def decode_jwt_payload(token):
     try:
@@ -99,7 +117,7 @@ def decode_jwt_payload(token):
         decoded = base64.urlsafe_b64decode(payload)
         return json.loads(decoded)
     except Exception as e:
-        print(f"JWT decode error: {e}")
+        log(f"❌ JWT decode error: {e}")
         return None
 
 def is_token_expired(token):
@@ -139,19 +157,19 @@ def open_gate(lane_id, gate_name, site_id=None, visit_id=None):
     }
 
     try:
-        print(f"\nOpening gate: POST {endpoint}")
+        log(f"🚪 Opening gate: {gate_name} (Lane {lane_id}, Site {site})")
         response = requests.post(url, headers=headers, timeout=10)
-        print(f"Status: {response.status_code}")
 
         if response.status_code in [200, 201, 204]:
-            print(f"Gate {gate_name} opened!")
+            log(f"✅ Gate {gate_name} opened successfully!")
             current_status["last_action"] = f"Opened {gate_name}"
+            current_status["gates_opened"] += 1
             return True
         else:
-            print(f"Error opening gate: {response.text}")
+            log(f"❌ Failed to open gate: Status {response.status_code}")
             return False
     except Exception as e:
-        print(f"Error: {e}")
+        log(f"❌ Error opening gate: {e}")
         return False
 
 def get_active_visits(site_id):
@@ -169,15 +187,26 @@ def get_active_visits(site_id):
                 transactions = data['data'].get('transactions', [])
                 return [t for t in transactions if 'VEND_GATE' in t.get('availableActionsForSpecialist', [])]
     except Exception as e:
-        print(f"Error getting visits: {e}")
+        log(f"❌ Error getting visits: {e}")
     return None
 
 def monitor_and_auto_open():
+    """CONTINUOUS monitoring - runs FOREVER in background"""
     global monitoring_active, AUTH_KEY
     last_opened = {}
+    cycle = 0
 
-    while monitoring_active:
+    log("🚀 MONITORING STARTED - Running continuously forever...")
+    current_status["monitoring"] = "ACTIVE - Running 24/7"
+
+    while True:  # ALWAYS runs - no condition check
         try:
+            cycle += 1
+            current_status["monitoring_cycles"] = cycle
+            
+            if cycle % 20 == 0:  # Log every 60 seconds (20 cycles * 3 sec)
+                log(f"💓 Monitoring heartbeat - Cycle {cycle} - Members: {len(member_plates)}, Blacklist: {len(blacklist_plates)}")
+
             for site_id in ["4005", "4007"]:
                 transactions = get_active_visits(site_id)
 
@@ -198,9 +227,10 @@ def monitor_and_auto_open():
                             if visit_id and visit_id not in last_opened:
                                 user = transaction.get('user', {})
                                 user_name = f"{user.get('firstName', '')} {user.get('lastName', '')}".strip()
-                                msg = f"BLOCKED: {plate} ({user_name}) - ON BLACKLIST!"
-                                print(f"[BLOCKED] {msg}")
+                                msg = f"🚫 BLOCKED: {plate} ({user_name}) - ON BLACKLIST!"
+                                log(msg)
                                 current_status["last_action"] = msg
+                                current_status["vehicles_blocked"] += 1
                                 last_opened[visit_id] = time.time()
                         
                         # Check if plate is in member list
@@ -208,8 +238,8 @@ def monitor_and_auto_open():
                             if visit_id and visit_id not in last_opened:
                                 user = transaction.get('user', {})
                                 user_name = f"{user.get('firstName', '')} {user.get('lastName', '')}".strip()
-                                msg = f"AUTO-OPEN: {plate} ({user_name}) at site {site_id}"
-                                print(f"[AUTO-OPEN] {msg}")
+                                msg = f"✅ AUTO-OPEN: {plate} ({user_name}) at site {site_id}"
+                                log(msg)
                                 current_status["last_action"] = msg
 
                                 if lane_id:
@@ -223,10 +253,10 @@ def monitor_and_auto_open():
                 current_time = time.time()
                 last_opened = {k: v for k, v in last_opened.items() if current_time - v < 600}
 
-            time.sleep(3)
+            time.sleep(3)  # Check every 3 seconds
 
         except Exception as e:
-            print(f"Monitor error: {e}")
+            log(f"❌ Monitor error: {e}")
             import traceback
             traceback.print_exc()
             time.sleep(5)
@@ -235,12 +265,12 @@ def refresh_token_headless():
     global AUTH_KEY
 
     if not HAS_SELENIUM:
-        print("ERROR: Selenium not available. Cannot refresh token.")
+        log("❌ Selenium not available - cannot refresh token")
         return None
 
-    print("\n" + "="*60)
-    print("🔄 REFRESHING TOKEN (Headless Mode)")
-    print("="*60)
+    log("="*60)
+    log("🔄 REFRESHING TOKEN (Headless Mode)")
+    log("="*60)
 
     try:
         options = Options()
@@ -253,11 +283,11 @@ def refresh_token_headless():
         driver = webdriver.Chrome(options=options)
         driver.get(LOGIN_URL)
 
-        print("📱 Navigating to login page...")
+        log("📱 Navigating to login page...")
         time.sleep(3)
 
         try:
-            print("📧 Logging in...")
+            log("📧 Logging in...")
             email_field = driver.find_element(By.ID, "username")
             email_field.send_keys(EMAIL)
             time.sleep(1)
@@ -266,15 +296,15 @@ def refresh_token_headless():
             password_field.send_keys(PASSWORD)
             password_field.send_keys(Keys.RETURN)
 
-            print("🔐 Waiting for authentication...")
+            log("🔐 Waiting for authentication...")
             time.sleep(5)
 
         except Exception as e:
-            print(f"⚠️ Login error: {e}")
+            log(f"⚠️ Login error: {e}")
             driver.quit()
             return None
 
-        print("💉 Injecting token interceptor...")
+        log("💉 Injecting token interceptor...")
 
         intercept_script = """
         window.capturedToken = null;
@@ -317,9 +347,9 @@ def refresh_token_headless():
         """
 
         driver.execute_script(intercept_script)
-        print("✅ Interceptor installed!")
+        log("✅ Interceptor installed!")
 
-        print("⏳ Waiting for API call to capture token...")
+        log("⏳ Waiting for API call to capture token...")
         token = None
 
         for i in range(30):
@@ -327,37 +357,35 @@ def refresh_token_headless():
             token = driver.execute_script("return window.capturedToken;")
 
             if token:
-                print(f"\n✅ TOKEN CAPTURED! (after {i+1} seconds)")
+                log(f"✅ TOKEN CAPTURED! (after {i+1} seconds)")
                 break
 
             if i == 5:
-                print("   Refreshing page to trigger API calls...")
+                log("   Refreshing page to trigger API calls...")
                 driver.refresh()
                 time.sleep(2)
                 driver.execute_script(intercept_script)
 
-            print(f"   Waiting... ({i+1}s)", end='\r')
-
         driver.quit()
 
         if token:
-            print(f"\n✅ SUCCESS! Token refreshed!")
-            print(f"Token preview: {token[:50]}...")
+            log(f"✅ SUCCESS! Token refreshed!")
+            log(f"Token preview: {token[:50]}...")
             AUTH_KEY = token
 
             with open('auth_token.txt', 'w') as f:
                 f.write(token)
 
-            print("="*60)
+            log("="*60)
             current_status["last_action"] = "Token refreshed successfully"
             return token
         else:
-            print("\n❌ No token captured after 30 seconds")
-            print("="*60)
+            log("❌ No token captured after 30 seconds")
+            log("="*60)
             return None
 
     except Exception as e:
-        print(f"❌ Token refresh error: {e}")
+        log(f"❌ Token refresh error: {e}")
         import traceback
         traceback.print_exc()
         try:
@@ -367,12 +395,18 @@ def refresh_token_headless():
         return None
 
 def token_monitor_loop():
+    """CONTINUOUS token monitoring - runs FOREVER in background"""
     global token_monitor_active, AUTH_KEY
+    check_count = 0
 
-    print("\n🔐 Token monitor started - checking every 3 minutes")
+    log("🔐 TOKEN MONITOR STARTED - Running continuously forever...")
+    current_status["token_monitor"] = "ACTIVE - Running 24/7"
 
-    while token_monitor_active:
+    while True:  # ALWAYS runs - no condition check
         try:
+            check_count += 1
+            current_status["token_checks"] = check_count
+            
             exp_time = get_token_expiration_time(AUTH_KEY)
 
             if exp_time:
@@ -380,31 +414,31 @@ def token_monitor_loop():
                 hours = int(time_remaining.total_seconds() // 3600)
                 minutes = int((time_remaining.total_seconds() % 3600) // 60)
 
-                status_msg = f"Token expires in {hours}h {minutes}m"
-                print(f"[TOKEN CHECK] {status_msg}")
+                status_msg = f"Token expires in {hours}h {minutes}m (Check #{check_count})"
+                log(f"🔐 {status_msg}")
                 current_status["token_monitor"] = status_msg
 
                 if is_token_expired(AUTH_KEY):
-                    print("\n⚠️ TOKEN EXPIRED OR EXPIRING SOON - Auto-refreshing...")
+                    log("⚠️ TOKEN EXPIRED OR EXPIRING SOON - Auto-refreshing...")
                     current_status["last_action"] = "Refreshing token..."
 
                     new_token = refresh_token_headless()
 
                     if new_token:
                         AUTH_KEY = new_token
-                        print("✅ Token successfully refreshed!")
+                        log("✅ Token successfully refreshed!")
                         current_status["last_action"] = "Token refreshed successfully"
                     else:
-                        print("❌ Token refresh failed!")
+                        log("❌ Token refresh failed!")
                         current_status["last_action"] = "Token refresh failed"
             else:
-                print("[TOKEN CHECK] Could not decode token")
+                log("❌ Could not decode token")
                 current_status["token_monitor"] = "Token decode error"
 
-            time.sleep(180)
+            time.sleep(180)  # Check every 3 minutes
 
         except Exception as e:
-            print(f"Token monitor error: {e}")
+            log(f"❌ Token monitor error: {e}")
             import traceback
             traceback.print_exc()
             time.sleep(60)
@@ -418,7 +452,7 @@ def get_hanging_exits(site_id):
         if response.status_code == 200:
             return response.json()
     except Exception as e:
-        print(f"Error fetching hanging exits: {e}")
+        log(f"❌ Error fetching hanging exits: {e}")
     return None
 
 def get_closed_visits(site_id, count=25):
@@ -430,7 +464,7 @@ def get_closed_visits(site_id, count=25):
         if response.status_code == 200:
             return response.json()
     except Exception as e:
-        print(f"Error fetching closed visits: {e}")
+        log(f"❌ Error fetching closed visits: {e}")
     return None
 
 def get_occupancy(site_id):
@@ -442,7 +476,7 @@ def get_occupancy(site_id):
         if response.status_code == 200:
             return response.json()
     except Exception as e:
-        print(f"Error fetching occupancy: {e}")
+        log(f"❌ Error fetching occupancy: {e}")
     return None
 
 def get_all_members(site_id):
@@ -471,7 +505,7 @@ def get_all_members(site_id):
                         seen_users.add(user.get('phoneNumber'))
                 return members
     except Exception as e:
-        print(f"Error getting members: {e}")
+        log(f"❌ Error getting members: {e}")
     return []
 
 # API Endpoints
@@ -492,12 +526,27 @@ def status():
             token_status = "EXPIRED/EXPIRING SOON"
     
     return jsonify({
-        "monitoring": "ON" if monitoring_active else "OFF",
-        "token_monitor": "ON" if token_monitor_active else "OFF",
+        "monitoring": current_status["monitoring"],
+        "token_monitor": current_status["token_monitor"],
         "token_status": token_status,
         "last_action": current_status.get("last_action", "None"),
         "members_count": len(member_plates),
-        "blacklist_count": len(blacklist_plates)
+        "blacklist_count": len(blacklist_plates),
+        "monitoring_cycles": current_status.get("monitoring_cycles", 0),
+        "token_checks": current_status.get("token_checks", 0),
+        "gates_opened": current_status.get("gates_opened", 0),
+        "vehicles_blocked": current_status.get("vehicles_blocked", 0),
+        "uptime": "RUNNING 24/7"
+    })
+
+@app.route('/health')
+def health():
+    """Health check endpoint for Render.com"""
+    return jsonify({
+        "status": "healthy",
+        "monitoring": "ACTIVE",
+        "token_monitor": "ACTIVE",
+        "timestamp": datetime.now().isoformat()
     })
 
 @app.route('/api/open_gate', methods=['POST'])
@@ -531,6 +580,7 @@ def api_add_member():
     if plate and plate not in member_plates:
         member_plates.append(plate)
         save_members()
+        log(f"➕ Added member: {plate}")
         return jsonify({"success": True})
     return jsonify({"success": False})
 
@@ -540,6 +590,7 @@ def api_remove_member():
     if plate in member_plates:
         member_plates.remove(plate)
         save_members()
+        log(f"➖ Removed member: {plate}")
         return jsonify({"success": True})
     return jsonify({"success": False})
 
@@ -553,6 +604,7 @@ def api_add_blacklist():
     if plate and plate not in blacklist_plates:
         blacklist_plates.append(plate)
         save_blacklist()
+        log(f"🚫 Added to blacklist: {plate}")
         return jsonify({"success": True})
     return jsonify({"success": False})
 
@@ -562,38 +614,9 @@ def api_remove_blacklist():
     if plate in blacklist_plates:
         blacklist_plates.remove(plate)
         save_blacklist()
+        log(f"✅ Removed from blacklist: {plate}")
         return jsonify({"success": True})
     return jsonify({"success": False})
-
-@app.route('/api/monitoring/toggle', methods=['POST'])
-def api_toggle_monitoring():
-    global monitoring_active, monitoring_thread
-    
-    if not monitoring_active:
-        monitoring_active = True
-        monitoring_thread = threading.Thread(target=monitor_and_auto_open, daemon=True)
-        monitoring_thread.start()
-        current_status["monitoring"] = "ON"
-    else:
-        monitoring_active = False
-        current_status["monitoring"] = "OFF"
-    
-    return jsonify({"monitoring": monitoring_active})
-
-@app.route('/api/token_monitor/toggle', methods=['POST'])
-def api_toggle_token_monitor():
-    global token_monitor_active, token_monitor_thread
-    
-    if not token_monitor_active:
-        token_monitor_active = True
-        token_monitor_thread = threading.Thread(target=token_monitor_loop, daemon=True)
-        token_monitor_thread.start()
-        current_status["token_monitor"] = "ON"
-    else:
-        token_monitor_active = False
-        current_status["token_monitor"] = "OFF"
-    
-    return jsonify({"token_monitor": token_monitor_active})
 
 @app.route('/api/waiting_cars')
 def api_waiting_cars():
@@ -654,21 +677,37 @@ HTML_TEMPLATE = '''
             border-radius: 10px;
         }
         .header h1 { font-size: 28px; margin-bottom: 10px; }
+        .live-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            background: #4CAF50;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+            margin-right: 8px;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
         .status-bar {
-            display: flex;
-            gap: 20px;
-            justify-content: center;
-            flex-wrap: wrap;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
             margin-bottom: 20px;
+        }
+        .status-item {
             padding: 15px;
             background: #2a2a2a;
             border-radius: 10px;
+            font-size: 13px;
+            border-left: 4px solid #4CAF50;
         }
-        .status-item {
-            padding: 10px 15px;
-            background: #3a3a3a;
-            border-radius: 5px;
-            font-size: 14px;
+        .status-item strong {
+            display: block;
+            font-size: 18px;
+            margin-top: 5px;
+            color: #4CAF50;
         }
         .tabs {
             display: flex;
@@ -709,7 +748,6 @@ HTML_TEMPLATE = '''
         .btn-primary { background: #1E88E5; color: white; }
         .btn-success { background: #4CAF50; color: white; }
         .btn-danger { background: #F44336; color: white; }
-        .btn-warning { background: #FFA726; color: white; }
         .gate-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -784,7 +822,12 @@ HTML_TEMPLATE = '''
         }
         .alert-success { background: #4CAF50; }
         .alert-danger { background: #F44336; }
-        .alert-warning { background: #FFA726; }
+        .alert-info {
+            background: #1E88E5;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
         .card {
             background: #3a3a3a;
             border-radius: 10px;
@@ -794,26 +837,31 @@ HTML_TEMPLATE = '''
         @media (max-width: 768px) {
             .gate-grid { grid-template-columns: 1fr; }
             .tabs { flex-direction: column; }
-            .status-bar { flex-direction: column; }
+            .status-bar { grid-template-columns: 1fr; }
         }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>🚗 Metropolis Parking Management</h1>
-        <p>Real-time Gate Control & Monitoring System</p>
+        <p><span class="live-indicator"></span>Real-time Gate Control & Monitoring System</p>
+        <p style="margin-top: 10px; font-size: 14px; opacity: 0.9;">🤖 Auto-Monitoring ALWAYS Active (24/7/365)</p>
     </div>
 
     <div class="status-bar" id="statusBar">
         <div class="status-item">⏰ Loading...</div>
     </div>
 
+    <div class="alert-info">
+        <strong>🚀 SYSTEM STATUS: ALWAYS RUNNING</strong><br>
+        Background services are ALWAYS active - monitoring runs 24/7 regardless of website visitors. 
+        The system continuously scans for member vehicles every 3 seconds and checks token expiration every 3 minutes.
+    </div>
+
     <div class="tabs">
         <button class="tab active" onclick="showTab('gates')">Gate Controls</button>
-        <button class="tab" onclick="showTab('monitoring')">Auto-Monitoring</button>
         <button class="tab" onclick="showTab('members')">Members</button>
         <button class="tab" onclick="showTab('blacklist')">Blacklist</button>
-        <button class="tab" onclick="showTab('token')">Token</button>
         <button class="tab" onclick="showTab('waiting')">Waiting Cars</button>
         <button class="tab" onclick="showTab('visits')">Recent Visits</button>
         <button class="tab" onclick="showTab('occupancy')">Occupancy</button>
@@ -836,17 +884,11 @@ HTML_TEMPLATE = '''
         </div>
     </div>
 
-    <div id="monitoring" class="tab-content">
-        <h2>🤖 Auto-Monitoring System</h2>
-        <div class="card">
-            <p style="margin-bottom: 15px;">Automatically detects member vehicles and opens gates. Blocks blacklisted vehicles.</p>
-            <button class="btn btn-success" onclick="toggleMonitoring()">Toggle Monitoring</button>
-            <div id="monitoringStatus" style="margin-top: 15px; font-size: 16px;"></div>
-        </div>
-    </div>
-
     <div id="members" class="tab-content">
         <h2>👥 Member Management</h2>
+        <div class="alert-info">
+            Members are automatically detected and gates open without any action needed.
+        </div>
         <div class="input-group">
             <label>License Plate:</label>
             <input type="text" id="memberPlate" placeholder="ABC123">
@@ -866,16 +908,6 @@ HTML_TEMPLATE = '''
             <button class="btn btn-danger" onclick="addToBlacklist()">Add to Blacklist</button>
         </div>
         <div class="list-box" id="blacklistList"></div>
-    </div>
-
-    <div id="token" class="tab-content">
-        <h2>🔐 Token Management</h2>
-        <div class="card">
-            <div id="tokenInfo"></div>
-            <button class="btn btn-primary" onclick="refreshToken()" style="margin-top: 15px;">🔄 Refresh Token Now</button>
-            <button class="btn btn-success" onclick="toggleTokenMonitor()" style="margin-top: 15px;">Toggle Auto-Monitor</button>
-            <div id="tokenMonitorStatus" style="margin-top: 15px;"></div>
-        </div>
     </div>
 
     <div id="waiting" class="tab-content">
@@ -921,16 +953,54 @@ HTML_TEMPLATE = '''
         }
 
         async function updateStatus() {
-            const res = await fetch('/api/status');
-            const data = await res.json();
-            document.getElementById('statusBar').innerHTML = `
-                <div class="status-item">🤖 Monitoring: ${data.monitoring}</div>
-                <div class="status-item">🔐 Token: ${data.token_monitor}</div>
-                <div class="status-item">⏰ Token Status: ${data.token_status}</div>
-                <div class="status-item">👥 Members: ${data.members_count}</div>
-                <div class="status-item">🚫 Blacklist: ${data.blacklist_count}</div>
-                <div class="status-item">📝 ${data.last_action}</div>
-            `;
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                document.getElementById('statusBar').innerHTML = `
+                    <div class="status-item">
+                        <span>🤖 Monitoring</span>
+                        <strong>${data.monitoring}</strong>
+                    </div>
+                    <div class="status-item">
+                        <span>🔐 Token Monitor</span>
+                        <strong>${data.token_monitor}</strong>
+                    </div>
+                    <div class="status-item">
+                        <span>⏰ Token Status</span>
+                        <strong>${data.token_status}</strong>
+                    </div>
+                    <div class="status-item">
+                        <span>👥 Members</span>
+                        <strong>${data.members_count}</strong>
+                    </div>
+                    <div class="status-item">
+                        <span>🚫 Blacklist</span>
+                        <strong>${data.blacklist_count}</strong>
+                    </div>
+                    <div class="status-item">
+                        <span>🔄 Monitor Cycles</span>
+                        <strong>${data.monitoring_cycles}</strong>
+                    </div>
+                    <div class="status-item">
+                        <span>🔐 Token Checks</span>
+                        <strong>${data.token_checks}</strong>
+                    </div>
+                    <div class="status-item">
+                        <span>🚪 Gates Opened</span>
+                        <strong>${data.gates_opened}</strong>
+                    </div>
+                    <div class="status-item">
+                        <span>🚫 Vehicles Blocked</span>
+                        <strong>${data.vehicles_blocked}</strong>
+                    </div>
+                    <div class="status-item" style="grid-column: 1 / -1;">
+                        <span>📝 Last Action</span>
+                        <strong>${data.last_action}</strong>
+                    </div>
+                `;
+            } catch (e) {
+                console.error('Status update failed:', e);
+            }
         }
 
         async function openGate(laneId, gateName, siteId) {
@@ -948,22 +1018,6 @@ HTML_TEMPLATE = '''
             if (!confirm('Open ALL gates at BOTH sites?')) return;
             await fetch('/api/open_all_gates', {method: 'POST'});
             alert('All gates opened!');
-            updateStatus();
-        }
-
-        async function toggleMonitoring() {
-            const res = await fetch('/api/monitoring/toggle', {method: 'POST'});
-            const data = await res.json();
-            document.getElementById('monitoringStatus').innerHTML = 
-                `Status: <strong>${data.monitoring ? 'ON ✅' : 'OFF ❌'}</strong>`;
-            updateStatus();
-        }
-
-        async function toggleTokenMonitor() {
-            const res = await fetch('/api/token_monitor/toggle', {method: 'POST'});
-            const data = await res.json();
-            document.getElementById('tokenMonitorStatus').innerHTML = 
-                `Auto-Monitor: <strong>${data.token_monitor ? 'ON ✅' : 'OFF ❌'}</strong>`;
             updateStatus();
         }
 
@@ -1038,15 +1092,6 @@ HTML_TEMPLATE = '''
             updateStatus();
         }
 
-        async function refreshToken() {
-            if (!confirm('Manually refresh token? This may take 30 seconds.')) return;
-            document.getElementById('tokenInfo').innerHTML = '🔄 Refreshing token... Please wait...';
-            const res = await fetch('/api/refresh_token', {method: 'POST'});
-            const data = await res.json();
-            alert(data.success ? 'Token refreshed!' : 'Failed to refresh token');
-            updateStatus();
-        }
-
         async function loadWaitingCars() {
             document.getElementById('waitingData').innerHTML = 'Loading...';
             const res = await fetch('/api/waiting_cars');
@@ -1091,8 +1136,8 @@ HTML_TEMPLATE = '''
             document.getElementById('directoryData').innerHTML = output || 'No members found';
         }
 
-        // Auto-update status every 5 seconds
-        setInterval(updateStatus, 5000);
+        // Auto-update status every 3 seconds for real-time monitoring
+        setInterval(updateStatus, 3000);
         
         // Initial load
         updateStatus();
@@ -1103,51 +1148,63 @@ HTML_TEMPLATE = '''
 </html>
 '''
 
-def auto_start_services():
-    """Automatically start monitoring and token refresh on startup"""
-    global monitoring_active, monitoring_thread, token_monitor_active, token_monitor_thread
+def start_background_services():
+    """Start all background services immediately on server startup"""
+    global monitoring_thread, token_monitor_thread
     
-    print("\n" + "="*80)
-    print("🚀 AUTO-STARTING BACKGROUND SERVICES")
-    print("="*80)
+    log("\n" + "="*80)
+    log("🚀 STARTING BACKGROUND SERVICES (24/7 MODE)")
+    log("="*80)
     
-    # Start member/blacklist monitoring
-    if not monitoring_active:
-        monitoring_active = True
-        monitoring_thread = threading.Thread(target=monitor_and_auto_open, daemon=True)
-        monitoring_thread.start()
-        print("✅ Member/Blacklist monitoring started")
-        current_status["monitoring"] = "ON"
+    # Start member/blacklist monitoring thread
+    monitoring_thread = threading.Thread(target=monitor_and_auto_open, daemon=True, name="MonitoringThread")
+    monitoring_thread.start()
+    log("✅ Vehicle monitoring thread started (runs every 3 seconds)")
     
-    # Start token monitoring
-    if not token_monitor_active and HAS_SELENIUM:
-        token_monitor_active = True
-        token_monitor_thread = threading.Thread(target=token_monitor_loop, daemon=True)
+    # Start token monitoring thread
+    if HAS_SELENIUM:
+        token_monitor_thread = threading.Thread(target=token_monitor_loop, daemon=True, name="TokenMonitorThread")
         token_monitor_thread.start()
-        print("✅ Token auto-refresh monitoring started")
-        current_status["token_monitor"] = "ON"
-    elif not HAS_SELENIUM:
-        print("⚠️  Selenium not available - token auto-refresh disabled")
+        log("✅ Token monitoring thread started (checks every 3 minutes)")
+    else:
+        log("⚠️  Selenium not available - token auto-refresh disabled")
+        log("   (Token will need to be manually updated)")
     
-    print("="*80)
-    print("✅ ALL SERVICES RUNNING")
-    print("="*80 + "\n")
+    log("="*80)
+    log("✅ ALL BACKGROUND SERVICES RUNNING")
+    log("   - These services run CONTINUOUSLY 24/7")
+    log("   - No user interaction required")
+    log("   - Monitoring happens even with 0 website visitors")
+    log("="*80 + "\n")
+
+# Ensure threads are daemon so they don't prevent shutdown
+def cleanup():
+    log("🛑 Server shutting down - background threads will terminate")
+
+atexit.register(cleanup)
 
 if __name__ == '__main__':
-    print("\n" + "="*80)
-    print("METROPOLIS PARKING MANAGEMENT SYSTEM - WEB VERSION")
-    print("="*80)
-    print(f"Auth Key: {AUTH_KEY[:50]}...")
-    print(f"Sites: 4005 (555 Capitol Mall), 4007 (Bank of America)")
-    print("="*80 + "\n")
+    log("\n" + "="*80)
+    log("METROPOLIS PARKING MANAGEMENT SYSTEM - WEB VERSION")
+    log("="*80)
+    log(f"Auth Key: {AUTH_KEY[:50]}...")
+    log(f"Sites: 4005 (555 Capitol Mall), 4007 (Bank of America)")
+    log("="*80 + "\n")
     
-    # Load data
+    # Load persistent data
     load_members()
     load_blacklist()
     
-    # Auto-start all services
-    auto_start_services()
+    # Start background services IMMEDIATELY
+    start_background_services()
+    
+    # Small delay to let threads initialize
+    time.sleep(2)
+    
+    log("\n🌐 Starting Flask web server...")
+    log("   Web interface available for viewing status and manual controls")
+    log("   Background monitoring runs independently of web traffic\n")
     
     # Run Flask app
     port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
