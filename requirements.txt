@@ -2,7 +2,7 @@ Flask==2.3.3
 requests==2.31.0
 Werkzeug==2.3.7
 gunicorn==21.2.0
-
+requests==2.31.0
 # Optional for auto token refresh
 # Note: Selenium may not work on Render.com free tier due to browser driver requirements
 # selenium==4.16.0
