@@ -4,7 +4,7 @@ import requests
 import time
 import threading
 import logging
-from datetime import datetime
+import json
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -76,20 +76,19 @@ def refresh_tokens():
         return get_new_tokens()
 
 def token_refresh_loop():
-    """Continuously refresh tokens in background, even when no one is using the site"""
+    """Continuously refresh tokens in background"""
     if not get_new_tokens():
         logging.error("Could not get initial token")
     
     while True:
         try:
-            # Check if token is expired or about to expire
             if time.time() >= token_expiry_time:
                 logging.info("Token expired or expiring soon, refreshing...")
                 refresh_tokens()
-            time.sleep(10)  # Check every 10 seconds
+            time.sleep(10)
         except Exception as e:
             logging.error(f"Error in token refresh loop: {e}")
-            time.sleep(30)  # Wait longer on error before retrying
+            time.sleep(30)
 
 # Start token refresh thread
 threading.Thread(target=token_refresh_loop, daemon=True).start()
@@ -217,6 +216,49 @@ HTML_TEMPLATE = '''
             opacity: 0.6;
             cursor: not-allowed;
         }
+        
+        /* Custom Inputs */
+        .input-group {
+            display: flex;
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .input-field {
+            flex: 1;
+            padding: 15px;
+            border: 2px solid #e9ecef;
+            border-radius: 12px;
+            font-size: 1rem;
+            outline: none;
+            transition: border-color 0.3s ease;
+        }
+        
+        .input-field:focus {
+            border-color: #667eea;
+        }
+
+        /* Server Response Box */
+        .response-box {
+            background: #2d3436;
+            color: #00b894;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            display: none;
+            overflow-x: auto;
+            border-left: 5px solid #00b894;
+        }
+        
+        .response-label {
+            color: #dfe6e9;
+            font-size: 0.75rem;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
 
         .clock {
             font-size: 3rem;
@@ -304,24 +346,6 @@ HTML_TEMPLATE = '''
             height: 80px;
             margin-left: -2px;
             background: #555;
-        }
-
-        .watch-mark {
-            position: absolute;
-            width: 2px;
-            height: 10px;
-            background: #333;
-            left: 50%;
-            margin-left: -1px;
-            top: 5px;
-            transform-origin: center 107px;
-        }
-
-        .watch-number {
-            position: absolute;
-            font-size: 14px;
-            font-weight: bold;
-            color: #333;
         }
 
         .watch-label {
@@ -448,12 +472,6 @@ HTML_TEMPLATE = '''
             letter-spacing: 1px;
         }
 
-        .info-card p {
-            color: #212529;
-            font-size: 1.1rem;
-            font-weight: 600;
-        }
-
         .refresh-button {
             background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
             color: white;
@@ -497,28 +515,8 @@ HTML_TEMPLATE = '''
         }
 
         @media (max-width: 600px) {
-            .header h1 {
-                font-size: 1.8rem;
-            }
-            
-            .clock {
-                font-size: 2rem;
-            }
-            
-            .tab {
-                font-size: 0.9rem;
-                padding: 15px 10px;
-            }
-
-            .watch {
-                width: 200px;
-                height: 200px;
-            }
-
-            .modal-content {
-                margin: 20px;
-                padding: 30px;
-            }
+            .header h1 { font-size: 1.8rem; }
+            .input-group { flex-direction: column; gap: 10px; }
         }
     </style>
 </head>
@@ -535,12 +533,31 @@ HTML_TEMPLATE = '''
         </div>
 
         <div class="tab-content active" id="gate-control">
-            <h2 style="margin-bottom: 30px; color: #495057;">Gate Operations</h2>
+            <h2 style="margin-bottom: 20px; color: #495057;">Preset Gates</h2>
             {% for gate in gates %}
             <button class="gate-button" onclick="openGate('{{ gate.id }}', '{{ gate.name }}', '{{ gate.site_id }}')">
                 🚗 Open {{ gate.name }}
             </button>
             {% endfor %}
+
+            <div class="info-card" style="margin-top: 40px; border-left-color: #ff7675;">
+                <h3>Custom Gate Override</h3>
+                <p style="color: #636e72; font-size: 0.9rem; margin-bottom: 10px;">Manually enter target IDs below</p>
+                
+                <div class="input-group">
+                    <input type="text" id="custom-site-id" class="input-field" placeholder="Site ID (e.g. 4005)">
+                    <input type="text" id="custom-lane-id" class="input-field" placeholder="Lane ID (e.g. 5568)">
+                </div>
+                
+                <button class="gate-button" style="background: linear-gradient(135deg, #ff7675 0%, #d63031 100%); margin-top: 15px;" onclick="openCustomGate()">
+                    🔓 Open Custom Gate ID
+                </button>
+
+                <div id="custom-response-box" class="response-box">
+                    <div class="response-label">Raw Server Response:</div>
+                    <pre id="custom-response-content"></pre>
+                </div>
+            </div>
         </div>
 
         <div class="tab-content" id="system-status">
@@ -573,7 +590,6 @@ HTML_TEMPLATE = '''
         </div>
     </div>
 
-    <!-- Expired Token Modal -->
     <div class="modal" id="expired-modal">
         <div class="modal-content">
             <div class="modal-icon">⚠️</div>
@@ -651,22 +667,20 @@ HTML_TEMPLATE = '''
             await manualRefresh();
         }
 
+        // Handles both Preset and Custom gates
         async function openGate(laneId, laneName, siteId) {
             if (tokenExpired) {
                 showExpiredModal();
                 return;
             }
 
-            const button = event.target;
-            button.disabled = true;
+            // If coming from custom button, button ref might be different, but logic holds
             updateStatus(`Opening ${laneName}...`);
             
             try {
                 const response = await fetch('/api/open-gate', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         lane_id: laneId,
                         lane_name: laneName,
@@ -676,24 +690,46 @@ HTML_TEMPLATE = '''
                 
                 const data = await response.json();
                 
+                // Show raw response if it exists (for custom gate mostly)
+                if(data.raw_response) {
+                    const responseBox = document.getElementById('custom-response-box');
+                    const responseContent = document.getElementById('custom-response-content');
+                    responseBox.style.display = 'block';
+                    
+                    // Format JSON if possible
+                    if (typeof data.raw_response === 'object') {
+                        responseContent.textContent = JSON.stringify(data.raw_response, null, 2);
+                    } else {
+                        responseContent.textContent = data.raw_response;
+                    }
+                }
+
                 if (data.success) {
-                    updateStatus(`✓ ${laneName} opened successfully!`, 'success');
+                    updateStatus(`✓ ${laneName} command sent!`, 'success');
                 } else {
-                    updateStatus(`✗ Failed to open ${laneName}: ${data.error}`, 'error');
+                    updateStatus(`✗ Failed: ${data.error}`, 'error');
                 }
             } catch (error) {
                 updateStatus(`✗ Network error: ${error.message}`, 'error');
-            } finally {
-                button.disabled = false;
             }
+        }
+
+        function openCustomGate() {
+            const siteId = document.getElementById('custom-site-id').value;
+            const laneId = document.getElementById('custom-lane-id').value;
+            
+            if (!siteId || !laneId) {
+                updateStatus('⚠️ Please enter both Site ID and Lane ID', 'error');
+                return;
+            }
+            
+            openGate(laneId, "Custom Gate (" + laneId + ")", siteId);
         }
 
         async function manualRefresh() {
             updateStatus('Refreshing token...');
             try {
-                const response = await fetch('/api/refresh-token', {
-                    method: 'POST'
-                });
+                const response = await fetch('/api/refresh-token', { method: 'POST' });
                 const data = await response.json();
                 
                 if (data.success) {
@@ -717,45 +753,28 @@ HTML_TEMPLATE = '''
                     const expiryDate = new Date(data.expiry_time * 1000);
                     const now = new Date();
                     
-                    // Check if token is expired
                     if (now >= expiryDate) {
                         tokenExpired = true;
                         document.getElementById('token-watch').classList.add('expired');
                         document.getElementById('watch-label').classList.add('expired');
-                        document.getElementById('watch-time').classList.add('expired');
                         document.getElementById('watch-label').innerHTML = 'TOKEN EXPIRED!<br><div class="watch-time expired">Refresh Required</div>';
                         showExpiredModal();
                     } else {
                         tokenExpired = false;
                         document.getElementById('token-watch').classList.remove('expired');
                         document.getElementById('watch-label').classList.remove('expired');
-                        document.getElementById('watch-time').classList.remove('expired');
-                        
-                        const timeString = expiryDate.toLocaleTimeString('en-US', {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            second: '2-digit'
-                        });
-                        
-                        document.getElementById('watch-label').innerHTML = 
-                            'Token Expires At<div class="watch-time" id="watch-time">' + timeString + '</div>';
-                        
+                        const timeString = expiryDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                        document.getElementById('watch-label').innerHTML = 'Token Expires At<div class="watch-time" id="watch-time">' + timeString + '</div>';
                         updateWatchHands(expiryDate);
                     }
-                } else {
-                    document.getElementById('watch-label').innerHTML = 
-                        'Token Status<div class="watch-time">Not Available</div>';
                 }
             } catch (error) {
                 console.error('Error updating token info:', error);
             }
         }
 
-        // Update clock every second
         setInterval(updateClock, 1000);
         updateClock();
-
-        // Update token info every 5 seconds
         setInterval(updateTokenInfo, 5000);
         updateTokenInfo();
     </script>
@@ -778,7 +797,6 @@ def open_gate():
         current_token = access_token
         current_expiry = token_expiry_time
     
-    # Check if token is expired
     if time.time() >= current_expiry:
         return jsonify({'success': False, 'error': 'Token expired'}), 401
     
@@ -794,10 +812,32 @@ def open_gate():
     
     try:
         response = requests.post(url, headers=headers, timeout=15)
+        
+        # Capture raw response (JSON or Text)
+        try:
+            raw_data = response.json()
+        except:
+            raw_data = response.text
+
         response.raise_for_status()
-        return jsonify({'success': True, 'message': f'{lane_name} opened successfully'})
+        
+        return jsonify({
+            'success': True, 
+            'message': f'{lane_name} opened successfully',
+            'raw_response': raw_data
+        })
     except requests.exceptions.HTTPError as e:
-        return jsonify({'success': False, 'error': f'HTTP {e.response.status_code}'}), 500
+        # Try to get error details from response
+        try:
+            error_data = e.response.json()
+        except:
+            error_data = e.response.text
+            
+        return jsonify({
+            'success': False, 
+            'error': f'HTTP {e.response.status_code}',
+            'raw_response': error_data
+        }), 500
     except requests.exceptions.RequestException as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -810,7 +850,6 @@ def manual_refresh():
 def token_status():
     with token_lock:
         expiry = token_expiry_time
-    
     return jsonify({
         'expiry_time': expiry + 60 if expiry > 0 else None,
         'refresh_time': expiry if expiry > 0 else None
