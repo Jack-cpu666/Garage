@@ -97,7 +97,7 @@ def run_scanner(site_id, start_id, end_id):
     scan_logs.append(f"Starting scan on Site {site_id} from {start_id} to {end_id}...")
     
     for lane_id in range(start_id, end_id + 1):
-        if not scan_active:  # Allow stopping
+        if not scan_active:
             break
             
         with token_lock:
@@ -107,30 +107,33 @@ def run_scanner(site_id, start_id, end_id):
         headers = {'Authorization': f'Bearer {current_token}', 'Content-Type': 'application/json'}
         
         try:
-            # Short timeout for scanning
             resp = requests.post(url, headers=headers, timeout=3)
             
-            if resp.status_code == 200:
+            # PARSE JSON TO CHECK SUCCESS
+            try:
+                data = resp.json()
+                is_success = data.get('success') is True
+            except:
+                is_success = False
+
+            if is_success:
                 msg = f"✅ FOUND & OPENED: {lane_id}"
                 scan_logs.append(msg)
                 found_gates.append(lane_id)
-            elif resp.status_code == 404:
-                # Too much logging slows down browser, only log success or major errors
-                pass 
             elif resp.status_code == 401:
                 scan_logs.append("❌ Token Expired. Refreshing...")
                 refresh_tokens()
             else:
-                scan_logs.append(f"⚠️ ID {lane_id}: {resp.status_code}")
+                # If status is 200 but success is False, or 404
+                pass 
                 
         except Exception as e:
-            pass # Ignore connection errors during scan to keep speed up
+            pass 
             
-        # Update progress every 10 IDs
         if lane_id % 10 == 0:
             scan_logs.append(f"Scanning... currently at {lane_id}")
             
-        time.sleep(0.5) # Throttle
+        time.sleep(0.1)
         
     scan_logs.append("🎉 Scan Complete.")
     scan_active = False
@@ -154,18 +157,15 @@ HTML_TEMPLATE = '''
         .content { padding: 30px; display: none; }
         .content.active { display: block; }
         
-        /* Buttons */
         .btn { width: 100%; padding: 15px; margin: 10px 0; border: none; border-radius: 8px; font-size: 1.1rem; cursor: pointer; color: white; transition: 0.2s; }
         .btn-gate { background: #00b894; }
         .btn-gate:hover { background: #00a884; }
         .btn-scan { background: #e17055; }
         .btn-stop { background: #d63031; }
         
-        /* Scanner Logs */
         .log-window { background: #000; height: 300px; overflow-y: scroll; padding: 10px; font-family: monospace; border: 1px solid #636e72; margin-top: 15px; color: #00cec9; }
         .log-entry { margin-bottom: 5px; border-bottom: 1px solid #333; }
         
-        /* Inputs */
         .input-row { display: flex; gap: 10px; margin-bottom: 15px; }
         input { flex: 1; padding: 10px; border-radius: 5px; border: 1px solid #636e72; background: #353b48; color: white; }
     </style>
@@ -225,8 +225,17 @@ HTML_TEMPLATE = '''
                     body: JSON.stringify({lane_id: lane, site_id: site})
                 });
                 const data = await res.json();
-                document.getElementById('status').innerText = data.success ? "Success!" : "Error: " + data.error;
-            } catch(e) { document.getElementById('status').innerText = "Network Error"; }
+                
+                if (data.success) {
+                    document.getElementById('status').innerText = "Success! Gate Open.";
+                    document.getElementById('status').style.color = "#55efc4";
+                } else {
+                    document.getElementById('status').innerText = "Failed: " + (data.message || "Unknown error");
+                    document.getElementById('status').style.color = "#ff7675";
+                }
+            } catch(e) { 
+                document.getElementById('status').innerText = "Network Error"; 
+            }
         }
 
         function manualOpen() {
@@ -248,7 +257,6 @@ HTML_TEMPLATE = '''
             await fetch('/api/scan/stop', {method: 'POST'});
         }
 
-        // Poll for scan logs
         setInterval(async () => {
             if(document.getElementById('tab-1').classList.contains('active')) {
                 const res = await fetch('/api/scan/logs');
@@ -273,21 +281,37 @@ def api_open():
     data = request.json
     url = f"{API_BASE_URL}/site/{data['site_id']}/lane/{data['lane_id']}/open-gate"
     headers = {'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'}
+    
     try:
         r = requests.post(url, headers=headers, timeout=10)
-        return jsonify({'success': r.status_code == 200, 'code': r.status_code})
+        
+        # Parse JSON safely
+        try:
+            api_resp = r.json()
+            is_success = api_resp.get('success') is True
+            msg = api_resp.get('message', '')
+        except:
+            api_resp = {}
+            is_success = False
+            msg = "Could not parse server response"
+
+        # Return simplified status to frontend
+        return jsonify({
+            'success': is_success, 
+            'message': msg,
+            'raw': api_resp
+        })
+
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify({'success': False, 'message': str(e)})
 
 @app.route('/api/scan/start', methods=['POST'])
 def start_scan_route():
     global scan_thread, scan_logs, found_gates
     data = request.json
-    # Reset logs
     scan_logs = ["Initializing scan..."]
     found_gates = []
     
-    # Start thread
     scan_thread = threading.Thread(
         target=run_scanner, 
         args=(data['site'], int(data['start']), int(data['end']))
