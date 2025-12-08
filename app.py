@@ -1,26 +1,43 @@
 #!/usr/bin/env python3
+from flask import Flask, render_template_string, jsonify, request
 import requests
 import time
-import sys
+import threading
+import logging
+import json
 
-# --- CONFIGURATION ---
-SITE_ID_TO_SCAN = "4006"
-START_ID = 5500
-END_ID = 6000
-DELAY_BETWEEN_CHECKS = 0.1  # Seconds (prevent rate limiting/blocking)
+app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
 
-# Auth Credentials
+# --- Configuration ---
 EMAIL = "security@555capitolmall.com"
 PASSWORD = "555_Security"
-CLIENT_ID = "metropolis-web-client"
-
-# API Endpoints
 TOKEN_URL = "https://auth.metropolis.io/realms/metropolis/protocol/openid-connect/token"
 API_BASE_URL = "https://specialist.api.metropolis.io/api/specialist"
+CLIENT_ID = "metropolis-web-client"
 
-def get_access_token():
-    """Authenticates and returns a valid access token."""
-    print("🔑 Authenticating...", end=" ")
+# Preset Gates
+GATES_CONFIG = [
+    {"id": "5568", "name": "6th Street Exit", "site_id": "4005"},
+    {"id": "5569", "name": "L Street Exit", "site_id": "4005"},
+    {"id": "5565", "name": "Bank of America Exit", "site_id": "4007"},
+]
+
+# Global State
+access_token = None
+refresh_token = None
+token_expiry_time = 0
+token_lock = threading.Lock()
+
+# Scanner State
+scan_active = False
+scan_logs = []
+found_gates = []
+scan_thread = None
+
+# --- Auth Functions ---
+def get_new_tokens():
+    global access_token, refresh_token, token_expiry_time
     payload = {
         'client_id': CLIENT_ID,
         'grant_type': 'password',
@@ -32,77 +49,261 @@ def get_access_token():
         response = requests.post(TOKEN_URL, data=payload, timeout=10)
         response.raise_for_status()
         data = response.json()
-        print("Success!")
-        return data['access_token']
+        with token_lock:
+            access_token = data.get('access_token')
+            refresh_token = data.get('refresh_token')
+            token_expiry_time = time.time() + data.get('expires_in', 3600) - 60
+        return True
     except Exception as e:
-        print(f"\n❌ Auth Failed: {e}")
-        sys.exit(1)
+        logging.error(f"Failed to get token: {e}")
+        return False
 
-def scan_gates():
-    token = get_access_token()
-    valid_gates = []
+def refresh_tokens():
+    global access_token, refresh_token, token_expiry_time
+    if not refresh_token:
+        return get_new_tokens()
     
-    print(f"\n🔍 Starting Scan on Site {SITE_ID_TO_SCAN}")
-    print(f"🎯 Range: {START_ID} - {END_ID}")
-    print(f"⏱️  Delay: {DELAY_BETWEEN_CHECKS}s per request\n")
-    print("-" * 50)
-
+    payload = {
+        'client_id': CLIENT_ID,
+        'grant_type': 'refresh_token',
+        'refresh_token': refresh_token
+    }
     try:
-        for lane_id in range(START_ID, END_ID + 1):
-            # Construct URL
-            url = f"{API_BASE_URL}/site/{SITE_ID_TO_SCAN}/lane/{lane_id}/open-gate"
-            headers = {
-                'Authorization': f'Bearer {token}',
-                'Content-Type': 'application/json'
-            }
+        response = requests.post(TOKEN_URL, data=payload, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        with token_lock:
+            access_token = data.get('access_token')
+            token_expiry_time = time.time() + data.get('expires_in', 3600) - 60
+            refresh_token = data.get('refresh_token', refresh_token)
+        return True
+    except Exception:
+        return get_new_tokens()
 
-            # Print current check (overwrite line to keep clean)
-            sys.stdout.write(f"\r👉 Checking ID {lane_id}...")
-            sys.stdout.flush()
+def token_refresh_loop():
+    if not get_new_tokens():
+        logging.error("Could not get initial token")
+    while True:
+        if time.time() >= token_expiry_time:
+            refresh_tokens()
+        time.sleep(10)
 
-            try:
-                # We expect a 200 OK if the gate exists and opens
-                # We expect a 404 or 400 if the ID is invalid
-                response = requests.post(url, headers=headers, timeout=5)
-                
-                if response.status_code == 200:
-                    print(f"\n✅ FOUND & OPENED: {lane_id}")
-                    valid_gates.append(lane_id)
-                elif response.status_code == 404:
-                    # ID does not exist
-                    pass
-                elif response.status_code == 401:
-                    print(f"\n❌ Token Expired. Stopping.")
-                    break
-                else:
-                    # Some other error (500, 403, etc) - might be a valid gate but offline
-                    print(f"\n⚠️  ID {lane_id}: Error {response.status_code} ({response.reason})")
+threading.Thread(target=token_refresh_loop, daemon=True).start()
 
-            except requests.exceptions.RequestException as e:
-                print(f"\n❌ Connection Error on {lane_id}: {e}")
-
-            # Sleep to be safe
-            time.sleep(DELAY_BETWEEN_CHECKS)
-
-    except KeyboardInterrupt:
-        print("\n\n🛑 Scan interrupted by user.")
-
-    # --- SUMMARY ---
-    print("\n" + "=" * 50)
-    print("SCAN COMPLETE")
-    print("=" * 50)
+# --- Scanner Logic (Background Thread) ---
+def run_scanner(site_id, start_id, end_id):
+    global scan_active, scan_logs, found_gates
+    scan_active = True
+    scan_logs.append(f"Starting scan on Site {site_id} from {start_id} to {end_id}...")
     
-    if valid_gates:
-        print(f"🎉 Found {len(valid_gates)} working gates:")
-        print(valid_gates)
+    for lane_id in range(start_id, end_id + 1):
+        if not scan_active:  # Allow stopping
+            break
+            
+        with token_lock:
+            current_token = access_token
+            
+        url = f"{API_BASE_URL}/site/{site_id}/lane/{lane_id}/open-gate"
+        headers = {'Authorization': f'Bearer {current_token}', 'Content-Type': 'application/json'}
         
-        # Save to file
-        with open("valid_gates.txt", "w") as f:
-            for gid in valid_gates:
-                f.write(f"Site: {SITE_ID_TO_SCAN} | Gate ID: {gid}\n")
-        print("\nResults saved to 'valid_gates.txt'")
-    else:
-        print("No working gates found in this range.")
+        try:
+            # Short timeout for scanning
+            resp = requests.post(url, headers=headers, timeout=3)
+            
+            if resp.status_code == 200:
+                msg = f"✅ FOUND & OPENED: {lane_id}"
+                scan_logs.append(msg)
+                found_gates.append(lane_id)
+            elif resp.status_code == 404:
+                # Too much logging slows down browser, only log success or major errors
+                pass 
+            elif resp.status_code == 401:
+                scan_logs.append("❌ Token Expired. Refreshing...")
+                refresh_tokens()
+            else:
+                scan_logs.append(f"⚠️ ID {lane_id}: {resp.status_code}")
+                
+        except Exception as e:
+            pass # Ignore connection errors during scan to keep speed up
+            
+        # Update progress every 10 IDs
+        if lane_id % 10 == 0:
+            scan_logs.append(f"Scanning... currently at {lane_id}")
+            
+        time.sleep(0.5) # Throttle
+        
+    scan_logs.append("🎉 Scan Complete.")
+    scan_active = False
 
-if __name__ == "__main__":
-    scan_gates()
+# --- HTML Template ---
+HTML_TEMPLATE = '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Metropolis Master Control</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #2d3436; color: white; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; background: #1e272e; border-radius: 15px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        .header { background: #0984e3; padding: 20px; text-align: center; }
+        .tabs { display: flex; background: #2d3436; border-bottom: 1px solid #636e72; }
+        .tab { flex: 1; padding: 15px; text-align: center; cursor: pointer; background: #2d3436; transition: 0.3s; }
+        .tab:hover { background: #353b48; }
+        .tab.active { background: #1e272e; border-top: 3px solid #0984e3; font-weight: bold; }
+        .content { padding: 30px; display: none; }
+        .content.active { display: block; }
+        
+        /* Buttons */
+        .btn { width: 100%; padding: 15px; margin: 10px 0; border: none; border-radius: 8px; font-size: 1.1rem; cursor: pointer; color: white; transition: 0.2s; }
+        .btn-gate { background: #00b894; }
+        .btn-gate:hover { background: #00a884; }
+        .btn-scan { background: #e17055; }
+        .btn-stop { background: #d63031; }
+        
+        /* Scanner Logs */
+        .log-window { background: #000; height: 300px; overflow-y: scroll; padding: 10px; font-family: monospace; border: 1px solid #636e72; margin-top: 15px; color: #00cec9; }
+        .log-entry { margin-bottom: 5px; border-bottom: 1px solid #333; }
+        
+        /* Inputs */
+        .input-row { display: flex; gap: 10px; margin-bottom: 15px; }
+        input { flex: 1; padding: 10px; border-radius: 5px; border: 1px solid #636e72; background: #353b48; color: white; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header"><h1>🚪 Gate Master</h1></div>
+        <div class="tabs">
+            <div class="tab active" onclick="setTab(0)">Control</div>
+            <div class="tab" onclick="setTab(1)">Scanner</div>
+        </div>
+
+        <div class="content active" id="tab-0">
+            <h3>Preset Gates</h3>
+            {% for gate in gates %}
+            <button class="btn btn-gate" onclick="openGate('{{gate.id}}', '{{gate.name}}', '{{gate.site_id}}')">
+                Open {{ gate.name }}
+            </button>
+            {% endfor %}
+            
+            <h3 style="margin-top: 30px; border-top: 1px solid #444; padding-top: 20px;">Manual Override</h3>
+            <div class="input-row">
+                <input id="m-site" placeholder="Site ID">
+                <input id="m-lane" placeholder="Lane ID">
+            </div>
+            <button class="btn" style="background: #6c5ce7;" onclick="manualOpen()">Execute Open Command</button>
+            <div id="status" style="margin-top: 10px; text-align: center; color: #fab1a0;"></div>
+        </div>
+
+        <div class="content" id="tab-1">
+            <h3>Range Scanner (4006)</h3>
+            <div class="input-row">
+                <input id="scan-site" value="4006" placeholder="Site ID">
+                <input id="scan-start" value="5500" placeholder="Start ID">
+                <input id="scan-end" value="6000" placeholder="End ID">
+            </div>
+            <div class="input-row">
+                <button class="btn btn-scan" onclick="startScan()">Start Scan</button>
+                <button class="btn btn-stop" onclick="stopScan()">Stop</button>
+            </div>
+            <div class="log-window" id="scan-logs">Waiting to start...</div>
+        </div>
+    </div>
+
+    <script>
+        function setTab(idx) {
+            document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', i===idx));
+            document.querySelectorAll('.content').forEach((c, i) => c.classList.toggle('active', i===idx));
+        }
+
+        async function openGate(lane, name, site) {
+            document.getElementById('status').innerText = "Sending command...";
+            try {
+                const res = await fetch('/api/open', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({lane_id: lane, site_id: site})
+                });
+                const data = await res.json();
+                document.getElementById('status').innerText = data.success ? "Success!" : "Error: " + data.error;
+            } catch(e) { document.getElementById('status').innerText = "Network Error"; }
+        }
+
+        function manualOpen() {
+            openGate(document.getElementById('m-lane').value, 'Manual', document.getElementById('m-site').value);
+        }
+
+        async function startScan() {
+            const site = document.getElementById('scan-site').value;
+            const start = document.getElementById('scan-start').value;
+            const end = document.getElementById('scan-end').value;
+            await fetch('/api/scan/start', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({site, start, end})
+            });
+        }
+
+        async function stopScan() {
+            await fetch('/api/scan/stop', {method: 'POST'});
+        }
+
+        // Poll for scan logs
+        setInterval(async () => {
+            if(document.getElementById('tab-1').classList.contains('active')) {
+                const res = await fetch('/api/scan/logs');
+                const data = await res.json();
+                const logDiv = document.getElementById('scan-logs');
+                logDiv.innerHTML = data.logs.map(l => `<div class="log-entry">${l}</div>`).join('');
+                if(data.active) logDiv.scrollTop = logDiv.scrollHeight;
+            }
+        }, 1000);
+    </script>
+</body>
+</html>
+'''
+
+# --- Routes ---
+@app.route('/')
+def index():
+    return render_template_string(HTML_TEMPLATE, gates=GATES_CONFIG)
+
+@app.route('/api/open', methods=['POST'])
+def api_open():
+    data = request.json
+    url = f"{API_BASE_URL}/site/{data['site_id']}/lane/{data['lane_id']}/open-gate"
+    headers = {'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'}
+    try:
+        r = requests.post(url, headers=headers, timeout=10)
+        return jsonify({'success': r.status_code == 200, 'code': r.status_code})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/scan/start', methods=['POST'])
+def start_scan_route():
+    global scan_thread, scan_logs, found_gates
+    data = request.json
+    # Reset logs
+    scan_logs = ["Initializing scan..."]
+    found_gates = []
+    
+    # Start thread
+    scan_thread = threading.Thread(
+        target=run_scanner, 
+        args=(data['site'], int(data['start']), int(data['end']))
+    )
+    scan_thread.start()
+    return jsonify({'success': True})
+
+@app.route('/api/scan/stop', methods=['POST'])
+def stop_scan_route():
+    global scan_active
+    scan_active = False
+    return jsonify({'success': True})
+
+@app.route('/api/scan/logs')
+def get_logs():
+    return jsonify({'logs': scan_logs, 'active': scan_active, 'found': found_gates})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
